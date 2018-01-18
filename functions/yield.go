@@ -36,11 +36,14 @@ func createYieldOpSpec(args query.Arguments, a *query.Administration) (query.Ope
 
 	spec := new(YieldOpSpec)
 
-	name, err := args.GetRequiredString("name")
+	name, ok, err := args.GetString("name")
 	if err != nil {
 		return nil, err
+	} else if ok {
+		spec.Name = name
+	} else {
+		spec.Name = "_result"
 	}
-	spec.Name = name
 
 	return spec, nil
 }

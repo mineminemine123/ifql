@@ -72,6 +72,8 @@ func (q *Spec) Parents(id OperationID) []*Operation {
 // prepare populates the internal datastructure needed to quickly navigate the query DAG.
 // As a result the query DAG is validated.
 func (q *Spec) prepare() error {
+	q.sorted = q.sorted[0:0]
+
 	parents, children, roots, err := q.determineParentsChildrenAndRoots()
 	if err != nil {
 		return err

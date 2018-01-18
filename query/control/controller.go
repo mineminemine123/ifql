@@ -112,6 +112,9 @@ func (c *Controller) compileQuery(q *Query, queryStr string) error {
 }
 
 func (c *Controller) enqueueQuery(q *Query) error {
+	if c.verbose {
+		log.Println("query", query.Formatted(&q.Spec, query.FmtJSON))
+	}
 	q.queue()
 	if err := q.Spec.Validate(); err != nil {
 		return errors.Wrap(err, "invalid query")

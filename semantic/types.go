@@ -260,6 +260,8 @@ func objectTypeOf(e *ObjectExpression) Type {
 	return NewObjectType(propertyTypes)
 }
 
+var EmptyObject = NewObjectType(nil)
+
 func NewObjectType(propertyTypes map[string]Type) Type {
 	propertyNames := make([]string, 0, len(propertyTypes))
 	for name := range propertyTypes {
