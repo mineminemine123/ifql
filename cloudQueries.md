@@ -32,6 +32,7 @@ AggregateCPUCluster = (CID, agFn) =>
       |> hostFilter()
       |> group(by:["host"])
       |> last()
+      |> group()
       |> agFn()
 
 
