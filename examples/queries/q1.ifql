@@ -1,0 +1,56 @@
+// potential builtins
+projectField = (f, table=<-) => filter(table:table, fn: (r) => r._field == f)
+projectMeasurement = (m, table=<-) => filter(table:table, fn: (r) => r._measurement == m)
+select = (measurement, field, table=<-) => projectMeasurement(m:measurement, table:table) |> projectField(f:field)
+withTag = (value, table=<-) => filter(table:table, fn: (r) => r["cluster_id"] == value)
+
+
+
+// I don't need these for this set of queries, but I think they would be nice to have
+// also they would need to write a custom func in Go
+// AnyOf = (table=<-, functions) =>  // filter that returns true if any of the list of input functions is true
+// OneOf = (table=<-, functions) => // filter that returns true if exactly one of the input functions is true
+// AllOf = (table=<-, functions) => // conjunction of filter functions.
+
+// helper functions //
+hostFilter = (table=<-) => filter(table:table, fn: (r) => (r["host"] == "influxmon"))
+// could be a built-in but we don't want to get too carried away with compound functions
+fromRange = (forDB, forRange) => from(db:forDB) |> range(start:forRange)
+
+AggregateCPUCluster = (agFn=(table=<-) => table ) =>
+    fromRange(forDB:"telegraf", forRange:-2m)
+      |> select(measurement: "system", field: "n_cpus")
+      //|> withTag(value: CID)
+      |> hostFilter()
+      |> group(by:["host"])
+      |> last()
+      |> group()
+      |> agFn()
+
+
+
+// InfluxQL TotalClusterCPU Query:
+// SELECT sum("last") from
+//   (SELECT last("n_cpus")
+//    FROM "telegraf"."default"."system"
+//    WHERE time > now() - 2m and cluster_id = :Cluster_Id:
+//      AND (host =~ /.*data.*/ OR host =~ /tot-.*-(3|4)/)
+//    GROUP BY host)
+
+
+
+// InfluxQL NumberOfNodes Query:
+// SELECT count("last") from
+//   (SELECT last("n_cpus")
+//     FROM "telegraf"."default"."system"
+//     WHERE time > now() - 2m and cluster_id = :Cluster_Id:
+//       AND (host =~ /.*data.*/ OR host =~ /tot-.*-(3|4)/)
+//     GROUP BY host)
+
+// NumberOfNodes = AggregateCPUCluster(agFn: count)
+
+// fromRange(forDB:"telegraf", forRange:-100h)
+//   |> select(measurement:"system",field:"n_cpus")
+//   |> limit(n:100)
+
+AggregateCPUCluster(agFn: sum)
