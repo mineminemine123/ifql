@@ -167,7 +167,7 @@ Example:
 
 ```
 cpu = from(db: "telegraf") |> filter(fn: (r) => r["_measurement"] == "cpu" and r["_field"] == "usage_user") |> range(start: -30m)
-mem = from(db: "telegraf") |> filter(fn: (r) => r["_measurement"] == "mem" and r["_field"] == "used_percent"}) |> range(start: -30m)
+mem = from(db: "telegraf") |> filter(fn: (r) => r["_measurement"] == "mem" and r["_field"] == "used_percent") |> range(start: -30m)
 join(tables:{cpu:cpu, mem:mem}, on:["host"], fn: (tables) => tables.cpu["_value"] + tables.mem["_value"])
 ```
 
@@ -195,6 +195,38 @@ Example: `from(db: "telegraf") |> last()`
 Restricts the number of rows returned in the results.
 
 Example: `from(db: "telegraf") |> limit(n: 10)`
+
+#### map
+
+Applies a function to each row of the table.
+
+##### options
+
+* `fn` function
+
+Function to apply to each row. The return value of the function may be a single value or an object.
+
+Example:
+```
+from(db:"foo")
+    |> filter(fn: (r) => r["_measurement"]=="cpu" AND
+                r["_field"] == "usage_system" AND
+                r["service"] == "app-server")
+    |> range(start:-12h)
+    // Square the value
+    |> map(fn: (r) => r._value * r._value)
+```
+
+Example:
+```
+from(db:"foo")
+    |> filter(fn: (r) => r["_measurement"]=="cpu" AND
+                r["_field"] == "usage_system" AND
+                r["service"] == "app-server")
+    |> range(start:-12h)
+    // Square the value and keep the original value
+    |> map(fn: (r) => ({value: r._value, value2:r._value * r._value}))
+```
 
 #### max
 
