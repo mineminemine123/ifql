@@ -8,13 +8,16 @@ export GO_GENERATE=go generate $(GO_ARGS)
 SOURCES := $(shell find . -name '*.go' -not -name '*_test.go')
 SOURCES_NO_VENDOR := $(shell find . -path ./vendor -prune -o -name "*.go" -not -name '*_test.go' -print)
 
-all: Gopkg.lock $(SUBDIRS) bin/ifql bin/ifqld
+all: Gopkg.lock $(SUBDIRS) bin/ifql bin/ifqld bin/repl
 
 $(SUBDIRS): bin/pigeon bin/cmpgen
 	$(MAKE) -C $@ $(MAKECMDGOALS)
 
 bin/ifql: $(SOURCES) bin/pigeon bin/cmpgen
 	$(GO_BUILD) -i -o bin/ifql ./cmd/ifql
+
+bin/repl: $(SOURCES) bin/pigeon bin/cmpgen
+	$(GO_BUILD) -i -o bin/repl ./cmd/repl
 
 bin/ifqld: $(SOURCES) bin/pigeon bin/cmpgen
 	$(GO_BUILD) -i -o bin/ifqld ./cmd/ifqld

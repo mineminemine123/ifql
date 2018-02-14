@@ -34,7 +34,7 @@ func (itrp interpreter) eval(program *semantic.Program, scope *Scope) error {
 }
 
 func (itrp interpreter) doStatement(stmt semantic.Statement, scope *Scope) error {
-	scope.SetReturn(value{t: semantic.KInvalid})
+	scope.SetReturn(value{t: semantic.Invalid})
 	switch s := stmt.(type) {
 	case *semantic.NativeVariableDeclaration:
 		if err := itrp.doVariableDeclaration(s, scope); err != nil {
