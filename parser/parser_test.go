@@ -1547,13 +1547,13 @@ join(
 
 var benchmarkProgram interface{}
 
-func BenchmarkParse(b *testing.B) {
-	b.ReportAllocs()
-	var err error
-	for n := 0; n < b.N; n++ {
-		benchmarkProgram, err = parser.Parse("", benchmarkQuery)
-		if err != nil {
-			b.Fatal(err)
-		}
-	}
-}
+//func BenchmarkParse(b *testing.B) {
+//	b.ReportAllocs()
+//	var err error
+//	for n := 0; n < b.N; n++ {
+//		benchmarkProgram, err = parser.Parse("", benchmarkQuery)
+//		if err != nil {
+//			b.Fatal(err)
+//		}
+//	}
+//}

@@ -1,0 +1,179 @@
+package parser
+
+import "fmt"
+
+%%{
+	machine ifql;
+
+	action Start {
+		//fmt.Printf("D! begin p: %d pe: %d eof: %d\n", m.p, m.pe, m.eof)
+		m.ts = m.p
+	}
+
+	action finish {
+		//fmt.Printf("D! finish p: %d pe: %d eof: %d\n", m.p, m.pe, m.eof)
+		m.te = m.p
+		fbreak;
+	}
+
+	action fieldkey {
+		tp = FieldKey;
+	}
+
+	action float {
+		tp = FieldFloat;
+	}
+
+	action integer {
+		tp = FieldInt;
+	}
+
+	action name {
+		tp = Measurement;
+	}
+
+	action end {
+		tp = EOL;
+	}
+
+	action timestamp {
+		tp = Timestamp;
+	}
+
+	action tagkey {
+		tp = TagKey;
+	}
+
+	action tagvalue {
+		tp = TagValue;
+	}
+
+	action bool {
+		tp = FieldBool;
+	}
+
+	action string {
+		tp = FieldString;
+	}
+
+
+    main := ws Program ws EOF;
+    
+    Program = "prog";
+
+	ws = [\t\v\f ];
+	non_zero_digit = [1-9];
+
+	integer =
+		'-'? ( digit | ( non_zero_digit digit* ) );
+
+	number =
+		integer? ( '.' digit* )?;
+
+	timestamp =
+		digit+ >begin %timestamp %finish;
+
+	fieldkeychar =
+		[^\t\n\f\r ,=\\] | ( '\\' [^\t\n\f\r] );
+
+	fieldkey =
+		fieldkeychar+ >begin %fieldkey %finish;
+
+	fieldfloat =
+		number >begin %float %finish;
+
+	fieldinteger =
+		(integer 'i') >begin %integer %finish;
+
+	false =
+		"false" | "FALSE" | "False" | "F" | "f";
+
+	true =
+		"true" | "TRUE" | "True" | "T" | "t";
+
+	fieldbool =
+		(true | false) >begin %bool %finish;
+
+	fieldstringchar =
+		[^\\"] | '\\' [\\"];
+
+	fieldstring =
+		fieldstringchar* >begin %string %finish;
+
+	fieldstringquoted =
+		'"' fieldstring '"';
+
+	fieldvalue = fieldinteger | fieldfloat | fieldstringquoted | fieldbool;
+
+	field =
+		fieldkey '=' fieldvalue;
+
+	fieldset =
+		field ( ',' field )*;
+
+	tagchar =
+		[^\t\n\f\r ,=\\] | ( '\\' [^\t\n\f\r] );
+
+	tagkey =
+		tagchar+ >begin %tagkey %finish;
+
+	tagvalue =
+		tagchar+ >begin %tagvalue %finish;
+
+	tagset =
+		(',' tagkey '=' tagvalue)*;
+
+	measurement_chars =
+		[^\t\n\f\r ,\\] | ( '\\' [^\t\n\f\r] );
+
+	measurement =
+		alpha+ >begin %name %finish;
+
+	main :=
+		measurement tagset ws+ fieldset (ws+ timestamp)? %eof(end);
+
+	write data;
+}%%
+
+type Machine struct {
+	data       []byte
+	cs         int
+	ts, te     int
+	act        int
+	p, pe, eof int
+}
+
+func NewMachine(data []byte) Machine {
+	m := Machine{
+		data: data,
+		pe: len(data),
+		eof: len(data),
+	}
+
+	%% access m.;
+	%% variable p m.p;
+	%% variable pe m.pe;
+	%% variable eof m.eof;
+	%% variable data m.data;
+	%% write init;
+
+	return m
+}
+
+func (m *Machine) Scan() ([]byte, TokenType, error) {
+	if m.p >= m.pe {
+		return nil, EOL, nil
+	}
+
+	//var ts, te int
+	var tp TokenType
+
+
+	%% write exec;
+
+	if tp == NoMatch {
+		return nil, EOL, fmt.Errorf("error")
+	}
+
+	return m.data[m.ts:m.te], tp, nil
+}
