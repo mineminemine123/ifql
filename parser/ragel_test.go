@@ -17,16 +17,52 @@ func TestRagel(t *testing.T) {
 		wantErr bool
 	}{
 		{
-			name: "from",
-			raw:  `x = expression`,
+			name: "var decl",
+			raw:  `x = a`,
+			want: &ast.Program{
+				Body: []ast.Statement{
+					&ast.VariableDeclaration{
+						Declarations: []*ast.VariableDeclarator{{
+							ID:   &ast.Identifier{Name: "x"},
+							Init: &ast.Identifier{Name: "a"},
+						}},
+					},
+				},
+			},
+		},
+		{
+			name: "return statement",
+			raw:  `return a`,
+			want: &ast.Program{
+				Body: []ast.Statement{
+					&ast.ReturnStatement{
+						Argument: &ast.Identifier{Name: "a"},
+					},
+				},
+			},
+		},
+		{
+			name: "block statement",
+			raw:  `{ a }`,
+			want: &ast.Program{
+				Body: []ast.Statement{
+					&ast.BlockStatement{
+						Body: []ast.Statement{
+							&ast.ExpressionStatement{
+								Expression: &ast.Identifier{Name: "a"},
+							},
+						},
+					},
+				},
+			},
+		},
+		{
+			name: "identifier",
+			raw:  `abc`,
 			want: &ast.Program{
 				Body: []ast.Statement{
 					&ast.ExpressionStatement{
-						Expression: &ast.CallExpression{
-							Callee: &ast.Identifier{
-								Name: "from",
-							},
-						},
+						Expression: &ast.Identifier{Name: "abc"},
 					},
 				},
 			},

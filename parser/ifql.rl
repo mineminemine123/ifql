@@ -1,41 +1,117 @@
 package parser
 
-import "fmt"
+import (
+	"fmt"
+	"log"
+
+	"github.com/influxdata/ifql/ast"
+)
+
+var (
+	blockMarker = (*ast.BlockStatement)(nil)
+)
 
 %%{
 	machine ifql;
-
 	action start {
-		fmt.Printf("D! begin p: %d pe: %d eof: %d\n", m.p, m.pe, m.eof)
+		m.ts = m.p
+		log.Println("start", m.ts)
+	}
+	action finish {
+		m.te = m.p
+		log.Println("finish", m.ts, m.te)
 	}
 
-	action operator {
-        tp = Operator
-	}
 	action identifier {
-        tp = Identifier
-	}
-	action expression {
-        tp = Expression
-	}
+		log.Println("action identifier", m.stack)
 
-	action end {
-		tp = EOF;
+		m.push(&ast.Identifier{
+			Name: string(m.current()),
+		})
 	}
 
+	action variableStatement {
+		log.Println("action variableStatement", m.stack)
 
+		init := m.pop().(ast.Expression)
+		id := m.pop().(*ast.Identifier)
+		s := &ast.VariableDeclaration{
+			Declarations: []*ast.VariableDeclarator{{
+				ID: id,
+				Init: init,
+			}},
+		}
+		m.push(s)
+	}
+	action expressionStatement {
+		log.Println("action expressionStatement", m.stack)
 
-	ws = [\t\v\f ];
+		expr := m.pop().(ast.Expression)
+		s := &ast.ExpressionStatement{
+			Expression: expr,
+		}
+		m.push(s)
+	}
+	action returnStatement {
+		log.Println("action returnStatement", m.stack)
 
-    operator = '=' %operator;
-    identifier = [\w] %identifier;
-    expression = 'expression' %expression;
-    
+		expr := m.pop().(ast.Expression)
+		s := &ast.ReturnStatement{
+			Argument: expr,
+		}
+		m.push(s)
+	}
 
-    program = identifier ws operator ws expression;
+	action beginBlockStatement {
+		log.Println("action beginBlockStatement", m.stack)
+		m.push(blockMarker)
+	}
+	action endBlockStatement {
+		log.Println("action endBlockStatement", m.stack)
 
-    main := identifier %eof(end);
-    
+		s := &ast.BlockStatement{}
+		for {
+			n := m.pop()
+			if n == blockMarker {
+				break
+			}
+			stmt := n.(ast.Statement)
+			s.Body = append(s.Body, stmt)
+		}
+		m.push(s)
+	}
+
+	action program {
+		log.Println("action program", m.stack)
+
+		p := &ast.Program{}
+		for m.len() > 0 {
+			stmt := m.pop().(ast.Statement)
+			p.Body = append(p.Body, stmt)
+		}
+		m.push(p)
+	}
+
+	identifier = /[A-Za-z_][0-9A-Za-z_]*/ >start %finish %identifier;
+
+	# Expressions
+	expression = identifier;
+
+	# Statements
+	variableStatement = identifier space '=' space expression %variableStatement;
+	expressionStatement = expression %expressionStatement;
+	returnStatement = 'return' expression %returnStatement;
+	blockStatement = '{' expressionStatement* '}' >beginBlockStatement %endBlockStatement;
+
+	statement = returnStatement
+		| variableStatement
+		| expressionStatement
+		| blockStatement;
+
+	program =  statement+ %program;
+
+	main := program;
+
 	write data;
 }%%
 
@@ -43,10 +119,9 @@ type Machine struct {
 	data       []byte
 	cs         int
 	ts, te     int
-	act        int
 	p, pe, eof int
 
-    tokens []Token
+	stack []ast.Node
 }
 
 func NewMachine(data []byte) Machine {
@@ -66,23 +141,36 @@ func NewMachine(data []byte) Machine {
 	return m
 }
 
-func (m *Machine) Scan() (Token, error) {
+func (m *Machine) Scan() (error) {
 	if m.p >= m.pe {
-		return Token{Type:EOF}, fmt.Errorf("EOF")
+		return fmt.Errorf("EOF")
 	}
-
-	//var ts, te int
-	var tp TokenType
-
 
 	%% write exec;
 
-	if tp == NoMatch {
-		return Token{Type:EOF}, fmt.Errorf("not found")
+	if m.len() != 1 {
+		log.Println(m.stack)
+		return fmt.Errorf("failed to parse")
 	}
 
-	return Token{
-        Type: tp,
-        Data: m.data[m.ts:m.te],
-    } , nil
+	return nil
+}
+
+func (m *Machine) push(n ast.Node) {
+	m.stack = append(m.stack, n)
+}
+
+func (m *Machine) len() int {
+	return len(m.stack)
+}
+
+func (m *Machine) pop() ast.Node {
+	e := len(m.stack) - 1
+	n := m.stack[e]
+	m.stack = m.stack[:e]
+	return n
+}
+
+func (m *Machine) current() []byte {
+	return m.data[m.ts:m.te]
 }

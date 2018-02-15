@@ -4,11 +4,8 @@ package parser
 
 // //go:generate pigeon -optimize-parser -optimize-grammar -o ifql.go ifql.peg
 //go:generate ragel -Z ifql.rl
-//go:generate gofmt -w ifql.go
 
 import (
-	"log"
-
 	"github.com/influxdata/ifql/ast"
 )
 
@@ -30,10 +27,11 @@ type parser struct {
 }
 
 func (p *parser) parse() (*ast.Program, error) {
-	tok, err := p.m.Scan()
+	err := p.m.Scan()
 	if err != nil {
 		return nil, err
 	}
-	log.Println(tok)
-	return nil, nil
+
+	prog := p.m.pop().(*ast.Program)
+	return prog, nil
 }
