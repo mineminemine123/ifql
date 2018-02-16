@@ -103,10 +103,12 @@ var (
 	returnStatement = 'return' expression %returnStatement;
 	blockStatement = '{' expressionStatement* '}' >beginBlockStatement %endBlockStatement;
 
-	statement = returnStatement
-		| variableStatement
-		| expressionStatement
-		| blockStatement;
+	statement = |*
+		returnStatement;
+		blockStatement;
+		variableStatement;
+		expressionStatement;
+	*|;
 
 	program =  statement+ %program;
 
