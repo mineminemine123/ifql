@@ -63,7 +63,7 @@ fromRange = (forDB, forRange) => from(db:forDB) |> range(start:forRange)
 MemPerDataNode = (DASHTIME, INTERVAL) =>
     fromRange(forDB:"telegraf", forRange:DASHTIME)
       |> select(measurement: "mem", field: "total")
-      //|> withCID(value: CID)
+      |> withCID(value: CID)
       //|> hostfilter()
       |> window(every: INTERVAL)
       |> group(by: ["host"])
