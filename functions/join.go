@@ -8,7 +8,6 @@ import (
 	"sync"
 
 	"github.com/influxdata/ifql/compiler"
-	"github.com/influxdata/ifql/interpreter"
 	"github.com/influxdata/ifql/query"
 	"github.com/influxdata/ifql/query/execute"
 	"github.com/influxdata/ifql/query/plan"
@@ -77,9 +76,12 @@ func createJoinOpSpec(args query.Arguments, a *query.Administration) (query.Oper
 			if t.Type().Kind() != semantic.Object {
 				return nil, fmt.Errorf("value for key %q in tables must be an object: got %v", k, t.Type().Kind())
 			}
-			id := query.GetIDFromObject(t.(interpreter.Object))
-			a.AddParent(id)
-			spec.TableNames[id] = k
+			if t.Type() != query.TableObjectType {
+				return nil, fmt.Errorf("value for key %q in tables must be an table object: got %v", k, t.Type())
+			}
+			p := t.(query.TableObject)
+			a.AddParent(p)
+			spec.TableNames[p.ID()] = k
 		}
 	}
 

@@ -137,6 +137,16 @@ func TestEval(t *testing.T) {
 			`,
 		},
 		{
+			name: "scope closing mutable",
+			query: `
+			x = 5
+            plusX = (r) => r + x
+            plusX(r:2) == 7 or fail()
+			x = 1
+            plusX(r:2) == 3 or fail()
+			`,
+		},
+		{
 			name: "return map from func",
 			query: `
             toMap = (a,b) => ({

@@ -167,7 +167,7 @@ func (p *planner) Plan(lp *LogicalPlanSpec, s Storage, now time.Time) (*PlanSpec
 	}
 
 	if p.plan.Bounds.Start.IsZero() && p.plan.Bounds.Stop.IsZero() {
-		return nil, errors.New("unbounded queries are not supported. Add a '.range' call to bound the query.")
+		return nil, errors.New("unbounded queries are not supported. Add a 'range' call to bound the query.")
 	}
 
 	// Update concurrency quota

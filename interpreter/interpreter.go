@@ -34,16 +34,18 @@ func (itrp interpreter) eval(program *semantic.Program, scope *Scope) error {
 }
 
 func (itrp interpreter) doStatement(stmt semantic.Statement, scope *Scope) error {
+	scope.SetReturn(value{t: semantic.Invalid})
 	switch s := stmt.(type) {
 	case *semantic.NativeVariableDeclaration:
 		if err := itrp.doVariableDeclaration(s, scope); err != nil {
 			return err
 		}
 	case *semantic.ExpressionStatement:
-		_, err := itrp.doExpression(s.Expression, scope)
+		v, err := itrp.doExpression(s.Expression, scope)
 		if err != nil {
 			return err
 		}
+		scope.SetReturn(v)
 	case *semantic.BlockStatement:
 		nested := scope.Nest()
 		for i, stmt := range s.Body {
@@ -383,10 +385,37 @@ func (s *Scope) Return() Value {
 	return s.returnValue
 }
 
+func (s *Scope) Names() []string {
+	if s == nil {
+		return nil
+	}
+	names := s.parent.Names()
+	for k := range s.values {
+		names = append(names, k)
+	}
+	return names
+}
+
 // Nest returns a new nested scope.
 func (s *Scope) Nest() *Scope {
 	c := NewScope()
 	c.parent = s
+	return c
+}
+
+// Copy returns a copy of the scope and its parents.
+func (s *Scope) Copy() *Scope {
+	c := NewScope()
+
+	// copy parent values into new scope
+	curr := s
+	for curr != nil {
+		// copy values
+		for k, v := range curr.values {
+			c.values[k] = v
+		}
+		curr = curr.parent
+	}
 	return c
 }
 
@@ -413,6 +442,9 @@ func (v value) Value() interface{} {
 }
 func (v value) Property(name string) (Value, error) {
 	return nil, fmt.Errorf("property %q does not exist", name)
+}
+func (v value) String() string {
+	return fmt.Sprintf("%v", v.v)
 }
 
 func NewBoolValue(v bool) Value {
@@ -716,6 +748,12 @@ func resolveValue(v Value) (semantic.Node, error) {
 type Array struct {
 	Elements []Value
 	typ      semantic.Type
+}
+
+func NewArray(elementType semantic.Type) Array {
+	return Array{
+		typ: semantic.NewArrayType(elementType),
+	}
 }
 
 func (a Array) Type() semantic.Type {

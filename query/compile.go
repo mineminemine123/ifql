@@ -15,8 +15,11 @@ import (
 )
 
 const (
-	TableParameter = "table"
-	tableIDKey     = "id"
+	TableParameter  = "table"
+	tableIDKey      = "id"
+	tableKindKey    = "kind"
+	tableParentsKey = "parents"
+	tableSpecKey    = "spec"
 )
 
 type Option func(*options)
@@ -57,7 +60,6 @@ func Compile(ctx context.Context, q string, opts ...Option) (*Spec, error) {
 
 	// Create new query domain
 	d := new(queryDomain)
-
 	if err := interpreter.Eval(semProg, scope, d); err != nil {
 		return nil, err
 	}
@@ -93,7 +95,76 @@ func RegisterFunction(name string, c CreateOperationSpec, sig semantic.FunctionS
 	)
 }
 
-var TableObjectType = semantic.NewObjectType(map[string]semantic.Type{tableIDKey: semantic.String})
+var TableObjectType = semantic.NewObjectType(map[string]semantic.Type{
+	tableIDKey:   semantic.String,
+	tableKindKey: semantic.String,
+	// TODO(nathanielc): The spec types vary significantly making type comparisons impossible, for now the solution is to state the type as an empty object.
+	tableSpecKey: semantic.EmptyObject,
+	// TODO(nathanielc): Support recursive types, for now we state that the array has empty objects.
+	tableParentsKey: semantic.NewArrayType(semantic.EmptyObject),
+})
+
+type TableObject struct {
+	interpreter.Object
+}
+
+func NewTableObject(t interpreter.Object) (TableObject, error) {
+	if typ := t.Type(); typ != TableObjectType {
+		return TableObject{}, fmt.Errorf("cannot create table object, wrong type: %v exp: %v", typ, TableObjectType)
+	}
+	return TableObject{
+		Object: t,
+	}, nil
+}
+
+func (t TableObject) ID() OperationID {
+	return OperationID(t.Properties[tableIDKey].Value().(string))
+}
+
+func (t TableObject) Kind() OperationKind {
+	return OperationKind(t.Properties[tableKindKey].Value().(string))
+}
+
+func (t TableObject) Spec() OperationSpec {
+	return t.Properties[tableSpecKey].Value().(OperationSpec)
+}
+func (t TableObject) Operation() *Operation {
+	return &Operation{
+		ID:   t.ID(),
+		Spec: t.Spec(),
+	}
+}
+
+func (t TableObject) String() string {
+	return fmt.Sprintf("{id: %q, kind: %q}", t.ID(), t.Kind())
+}
+
+func (t TableObject) ToSpec() *Spec {
+	visited := make(map[OperationID]bool)
+	spec := new(Spec)
+	t.buildSpec(spec, visited)
+	return spec
+}
+
+func (t TableObject) buildSpec(spec *Spec, visited map[OperationID]bool) {
+	id := t.ID()
+	parents := t.Properties[tableParentsKey].(interpreter.Array).Elements
+	for i := range parents {
+		p := parents[i].(TableObject)
+		if !visited[p.ID()] {
+			// rescurse up parents
+			p.buildSpec(spec, visited)
+		}
+
+		spec.Edges = append(spec.Edges, Edge{
+			Parent: p.ID(),
+			Child:  id,
+		})
+	}
+
+	visited[id] = true
+	spec.Operations = append(spec.Operations, t.Operation())
+}
 
 // DefaultFunctionSignature returns a FunctionSignature for standard functions which accept a table piped argument.
 // It is safe to modify the returned signature.
@@ -147,10 +218,22 @@ func FinalizeRegistration() {
 	builtins = nil
 }
 
+func BuiltIns() (*interpreter.Scope, semantic.DeclarationScope) {
+	return builtinScope.Nest(), builtinDeclarations.Copy()
+}
+
 type Administration struct {
 	id      OperationID
-	parents []OperationID
-	d       *queryDomain
+	parents interpreter.Array
+}
+
+func newAdministration(id OperationID) *Administration {
+	return &Administration{
+		id: id,
+		// TODO(nathanielc): Once we can support recursive types change this to,
+		// interpreter.NewArray(TableObjectType)
+		parents: interpreter.NewArray(semantic.EmptyObject),
+	}
 }
 
 // AddParentFromArgs reads the args for the `table` argument and adds the value as a parent.
@@ -159,44 +242,43 @@ func (a *Administration) AddParentFromArgs(args Arguments) error {
 	if err != nil {
 		return err
 	}
-	a.AddParent(GetIDFromObject(parent))
+	p, err := NewTableObject(parent)
+	if err != nil {
+		return err
+	}
+	a.AddParent(p)
 	return nil
-}
-
-func GetIDFromObject(obj interpreter.Object) OperationID {
-	return OperationID(obj.Properties[tableIDKey].Value().(string))
 }
 
 // AddParent instructs the evaluation Context that a new edge should be created from the parent to the current operation.
 // Duplicate parents will be removed, so the caller need not concern itself with which parents have already been added.
-func (a *Administration) AddParent(id OperationID) {
+func (a *Administration) AddParent(np TableObject) {
 	// Check for duplicates
-	for _, p := range a.parents {
-		if p == id {
+	for _, p := range a.parents.Elements {
+		if p.(TableObject).ID() == np.ID() {
 			return
 		}
 	}
-	a.parents = append(a.parents, id)
+	a.parents.Elements = append(a.parents.Elements, np)
 }
 
-func (a *Administration) finalize() {
-	// Add parents
-	a.d.AddParentEdges(a.id, a.parents...)
+type Domain interface {
+	interpreter.Domain
+	ToSpec() *Spec
+}
+
+func NewDomain() Domain {
+	return new(queryDomain)
 }
 
 type queryDomain struct {
 	id int
 
-	operations []*Operation
-	edges      []Edge
+	operations []TableObject
 }
 
-func (d *queryDomain) AddOperation(name string) *Operation {
-	o := &Operation{
-		ID: OperationID(fmt.Sprintf("%s%d", name, d.nextID())),
-	}
-	d.operations = append(d.operations, o)
-	return o
+func (d *queryDomain) NewID(name string) OperationID {
+	return OperationID(fmt.Sprintf("%s%d", name, d.nextID()))
 }
 
 func (d *queryDomain) nextID() int {
@@ -205,26 +287,13 @@ func (d *queryDomain) nextID() int {
 	return id
 }
 
-func (d *queryDomain) AddParentEdges(id OperationID, parents ...OperationID) {
-	if len(parents) > 1 {
-		// Always add parents in a consistent order
-		sort.Slice(parents, func(i, j int) bool { return parents[i] < parents[j] })
-	}
-	for _, p := range parents {
-		if p != id {
-			d.edges = append(d.edges, Edge{
-				Parent: p,
-				Child:  id,
-			})
-		}
-	}
-}
-
 func (d *queryDomain) ToSpec() *Spec {
-	return &Spec{
-		Operations: d.operations,
-		Edges:      d.edges,
+	spec := new(Spec)
+	visited := make(map[OperationID]bool)
+	for _, t := range d.operations {
+		t.buildSpec(spec, visited)
 	}
+	return spec
 }
 
 type function struct {
@@ -243,33 +312,57 @@ func (f function) Value() interface{} {
 func (f function) Property(name string) (interpreter.Value, error) {
 	return nil, fmt.Errorf("property %q does not exist", name)
 }
+func (f function) Resolve() (*semantic.FunctionExpression, error) {
+	return nil, fmt.Errorf("function %q cannot be resolved", f.name)
+}
 
 func (f function) Call(args interpreter.Arguments, d interpreter.Domain) (interpreter.Value, error) {
 	qd := d.(*queryDomain)
-	o := qd.AddOperation(f.name)
+	id := qd.NewID(f.name)
 
-	a := &Administration{
-		id: o.ID,
-		d:  qd,
-	}
+	a := newAdministration(id)
 
 	spec, err := f.createOpSpec(Arguments{Arguments: args}, a)
 	if err != nil {
 		return nil, err
 	}
-	o.Spec = spec
 
-	a.finalize()
+	if len(a.parents.Elements) > 1 {
+		// Always add parents in a consistent order
+		sort.Slice(a.parents.Elements, func(i, j int) bool {
+			return a.parents.Elements[i].(TableObject).ID() < a.parents.Elements[j].(TableObject).ID()
+		})
+	}
 
-	return interpreter.Object{
+	t, err := NewTableObject(interpreter.Object{
 		Properties: map[string]interpreter.Value{
-			tableIDKey: interpreter.NewStringValue(string(o.ID)),
+			tableIDKey:      interpreter.NewStringValue(string(id)),
+			tableKindKey:    interpreter.NewStringValue(string(spec.Kind())),
+			tableSpecKey:    specValue{spec: spec},
+			tableParentsKey: a.parents,
 		},
-	}, nil
+	})
+	if err != nil {
+		return nil, err
+	}
+	qd.operations = append(qd.operations, t)
+	return t, nil
 }
 
-func (f function) Resolve() (*semantic.FunctionExpression, error) {
-	return nil, fmt.Errorf("function %q cannot be resolved", f.name)
+type specValue struct {
+	spec OperationSpec
+}
+
+func (v specValue) Type() semantic.Type {
+	return semantic.EmptyObject
+}
+
+func (v specValue) Value() interface{} {
+	return v.spec
+}
+
+func (v specValue) Property(name string) (interpreter.Value, error) {
+	return nil, errors.New("spec does not have properties")
 }
 
 type Arguments struct {

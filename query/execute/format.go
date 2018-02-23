@@ -18,7 +18,7 @@ type Formatter struct {
 	// fmtBuf is used to format values
 	fmtBuf [64]byte
 
-	opts *FormatOptions
+	opts FormatOptions
 
 	cols orderedCols
 }
@@ -29,9 +29,7 @@ type FormatOptions struct {
 }
 
 func DefaultFormatOptions() *FormatOptions {
-	return &FormatOptions{
-		RepeatHeaderCount: 0,
-	}
+	return &FormatOptions{}
 }
 
 var eol = []byte{'\n'}
@@ -44,7 +42,7 @@ func NewFormatter(b Block, opts *FormatOptions) *Formatter {
 	}
 	return &Formatter{
 		b:    b,
-		opts: opts,
+		opts: *opts,
 	}
 }
 

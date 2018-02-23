@@ -1,7 +1,6 @@
 package main
 
 import (
-	"context"
 	"flag"
 	"fmt"
 	"io/ioutil"
@@ -9,23 +8,12 @@ import (
 	"math"
 	"os"
 	"runtime"
-	"runtime/pprof"
-	"sort"
 
 	"github.com/influxdata/ifql"
-	"github.com/influxdata/ifql/query/execute"
-	"github.com/influxdata/ifql/tracing"
-	"github.com/opentracing/opentracing-go"
+	"github.com/influxdata/ifql/repl"
 )
 
-var version string
-var commit string
-var date string
-
-var cpuprofile = flag.String("cpuprofile", "", "write cpu profile `file`")
-var memprofile = flag.String("memprofile", "", "write memory profile to `file`")
 var verbose = flag.Bool("v", false, "print verbose output")
-var trace = flag.Bool("trace", false, "print trace output")
 
 var hosts = make(hostList, 0)
 
@@ -47,11 +35,13 @@ func (l *hostList) Set(s string) error {
 var defaultStorageHosts = []string{"localhost:8082"}
 
 func usage() {
-	fmt.Println("Usage: ifql [OPTIONS] <query>")
+	fmt.Println("Usage: ifql [OPTIONS] [query]")
 	fmt.Println()
-	fmt.Println("Runs a query using the IFQL engine.")
+	fmt.Println("Runs queries using the IFQL engine.")
 	fmt.Println()
-	fmt.Println("The query argument is either a string query \nor a path to a file prefixed with an '@'.")
+	fmt.Println("If no query is provided an interactive REPL will be run.")
+	fmt.Println()
+	fmt.Println("The query argument is either a string query or a path to a file prefixed with an '@'.")
 	fmt.Println()
 	fmt.Println("Options:")
 
@@ -61,45 +51,11 @@ func usage() {
 func main() {
 	flag.Usage = usage
 	flag.Parse()
-	if tr := tracing.Open("ifql"); tr != nil {
-		defer tr.Close()
-	}
 
-	// Start cpuprofile
-	if *cpuprofile != "" {
-		f, err := os.Create(*cpuprofile)
-		if err != nil {
-			log.Fatal("could not create CPU profile: ", err)
-		}
-		defer f.Close()
-		if err := pprof.StartCPUProfile(f); err != nil {
-			log.Fatal("could not start CPU profile: ", err)
-		}
-		defer pprof.StopCPUProfile()
-	}
-
-	ctx := context.Background()
-	span := opentracing.StartSpan("query")
-	defer span.Finish()
-	ctx = opentracing.ContextWithSpan(ctx, span)
-
-	var queryStr string
-	if args := flag.Args(); len(args) == 1 {
-		q, err := loadQuery(args[0])
-		if err != nil {
-			log.Fatal(err)
-		}
-		queryStr = q
-	} else {
-		flag.Usage()
-		os.Exit(1)
-	}
-
-	fmt.Println("Running query:")
-	fmt.Println(queryStr)
 	if len(hosts) == 0 {
 		hosts = defaultStorageHosts
 	}
+
 	c, err := ifql.NewController(ifql.Config{
 		Hosts:            hosts,
 		ConcurrencyQuota: runtime.NumCPU() * 2,
@@ -109,48 +65,21 @@ func main() {
 	if err != nil {
 		log.Fatal(err)
 	}
-	q, err := c.QueryWithCompile(ctx, queryStr)
-	if err != nil {
-		log.Fatal(err)
-	}
-	defer q.Done()
+	repl := repl.New(c)
 
-	results, ok := <-q.Ready
-	if !ok {
-		err := q.Err()
-		log.Fatal(err)
-	}
-
-	names := make([]string, 0, len(results))
-	for name := range results {
-		names = append(names, name)
-	}
-	sort.Strings(names)
-
-	for _, name := range names {
-		r := results[name]
-		blocks := r.Blocks()
-		fmt.Println("Result:", name)
-		err := blocks.Do(func(b execute.Block) error {
-			execute.NewFormatter(b, nil).WriteTo(os.Stdout)
-			return nil
-		})
+	args := flag.Args()
+	switch len(args) {
+	case 0:
+		repl.Run()
+	case 1:
+		q, err := loadQuery(args[0])
 		if err != nil {
-			fmt.Println("Error:", err)
+			log.Fatal(err)
 		}
-	}
-
-	// Write out memprofile
-	if *memprofile != "" {
-		f, err := os.Create(*memprofile)
-		if err != nil {
-			log.Fatal("could not create memory profile: ", err)
-		}
-		defer f.Close()
-		runtime.GC() // get up-to-date statistics
-		if err := pprof.WriteHeapProfile(f); err != nil {
-			log.Fatal("could not write memory profile: ", err)
-		}
+		repl.Input(q)
+	default:
+		flag.Usage()
+		os.Exit(1)
 	}
 }
 
