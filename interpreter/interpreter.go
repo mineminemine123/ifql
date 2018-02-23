@@ -2,6 +2,7 @@ package interpreter
 
 import (
 	"fmt"
+	"regexp"
 	"strconv"
 	"time"
 
@@ -275,6 +276,11 @@ func (itrp interpreter) doLiteral(lit semantic.Literal) (Value, error) {
 			t: semantic.String,
 			v: l.Value,
 		}, nil
+	case *semantic.RegexpLiteral:
+		return value{
+			t: semantic.Regexp,
+			v: l.Value,
+		}, nil
 	case *semantic.BooleanLiteral:
 		return value{
 			t: semantic.Bool,
@@ -284,7 +290,6 @@ func (itrp interpreter) doLiteral(lit semantic.Literal) (Value, error) {
 	default:
 		return nil, fmt.Errorf("unknown literal type %T", lit)
 	}
-
 }
 
 func functionName(call *semantic.CallExpression) string {
@@ -929,7 +934,7 @@ func (a *arguments) GetArray(name string, t semantic.Kind) (Array, bool, error) 
 	}
 	arr := v.Value().(Array)
 	if arr.Type().ElementType() != t {
-		return Array{}, true, fmt.Errorf("keyword argument %q should be of an array of type %v, but got an array of type %v", name, t, arr.Type)
+		return Array{}, true, fmt.Errorf("keyword argument %q should be of an array of type %v, but got an array of type %v", name, t, arr.Type())
 	}
 	return v.Value().(Array), ok, nil
 }
@@ -940,7 +945,7 @@ func (a *arguments) GetRequiredArray(name string, t semantic.Kind) (Array, error
 	}
 	arr := v.Value().(Array)
 	if arr.Type().ElementType() != t {
-		return Array{}, fmt.Errorf("keyword argument %q should be of an array of type %v, but got an array of type %v", name, t, arr.Type)
+		return Array{}, fmt.Errorf("keyword argument %q should be of an array of type %v, but got an array of type %v", name, t, arr.Type())
 	}
 	return arr, nil
 }
@@ -1408,5 +1413,25 @@ var binaryFuncLookup = map[binaryFuncSignature]binaryFunc{
 		l := lv.Value().(string)
 		r := rv.Value().(string)
 		return NewBoolValue(l != r)
+	},
+	{operator: ast.RegexpMatchOperator, left: semantic.String, right: semantic.Regexp}: func(lv, rv Value) Value {
+		l := lv.Value().(string)
+		r := rv.Value().(*regexp.Regexp)
+		return NewBoolValue(r.MatchString(l))
+	},
+	{operator: ast.RegexpMatchOperator, left: semantic.Regexp, right: semantic.String}: func(lv, rv Value) Value {
+		l := lv.Value().(*regexp.Regexp)
+		r := rv.Value().(string)
+		return NewBoolValue(l.MatchString(r))
+	},
+	{operator: ast.NotRegexpMatchOperator, left: semantic.String, right: semantic.Regexp}: func(lv, rv Value) Value {
+		l := lv.Value().(string)
+		r := rv.Value().(*regexp.Regexp)
+		return NewBoolValue(!r.MatchString(l))
+	},
+	{operator: ast.NotRegexpMatchOperator, left: semantic.Regexp, right: semantic.String}: func(lv, rv Value) Value {
+		l := lv.Value().(*regexp.Regexp)
+		r := rv.Value().(string)
+		return NewBoolValue(!l.MatchString(r))
 	},
 }

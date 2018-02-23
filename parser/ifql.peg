@@ -191,7 +191,7 @@ LogicalExpression
     }
 
 EqualityOperators
-  = ("==" / "!=" ) {
+  = ("==" / "!=" / "=~" / "!~") {
       return operator(c.text)
     }
 
@@ -263,7 +263,7 @@ Primary
 Literal
   = StringLiteral
   / BooleanLiteral
-  / RegularExpressionLiteral
+  / RegexpLiteral
   / PipeLiteral
   / DurationLiteral
   / DateTimeLiteral
@@ -376,11 +376,11 @@ DurationLiteral
 
 StringLiteral
   = ( '"' DoubleStringChar* '"' ) {
-        return stringLiteral(c.text, c.pos)
-      }
+      return stringLiteral(c.text, c.pos)
+    }
   / ( '"' DoubleStringChar* ( EOL / EOF ) ) {
-        return "", errors.New("string literal not terminated")
-      }
+      return "", errors.New("string literal not terminated")
+    }
 
 DoubleStringChar
   = !( '"' / "\\" / EOL ) SourceChar
@@ -390,6 +390,36 @@ DoubleStringEscape
   = '"'
   / ( SourceChar / EOL / EOF ) {
       return nil, errors.New("invalid escape character")
+    }
+
+
+RegexpLiteral
+  = "/" pattern:RegexpBody "/" {
+        return pattern, nil
+      }
+
+RegexpBody
+  = chars:RegexpChar+ {
+      return regexLiteral(chars, c.text, c.pos)
+    }
+
+RegexpChar
+  = ![\\/] re:RegexpNonTerminator {
+      return re, nil
+    }
+  / RegexpBackslashSequence
+
+RegexpBackslashSequence
+  = "\\/" {
+      return []byte{'/'}, nil
+    }
+  / "\\" RegexpNonTerminator {
+      return c.text, nil
+    }
+
+RegexpNonTerminator
+  = !LineTerminator SourceChar {
+      return c.text, nil
     }
 
 BooleanLiteral
@@ -424,32 +454,6 @@ PipeLiteral
         return pipeLiteral(c.text, c.pos), nil
       }
 
-RegularExpressionLiteral
-  = "/" pattern:RegularExpressionBody "/" {
-        return pattern, nil
-      }
-
-RegularExpressionBody
-  = chars:RegularExpressionChar+ {
-      return regexLiteral(chars, c.text, c.pos)
-    }
-
-RegularExpressionChar
-  = ![\\/] re:RegularExpressionNonTerminator {
-      return re, nil
-    }
-  / RegularExpressionBackslashSequence
-
-RegularExpressionBackslashSequence
-  = "\\/" {
-      return "/", nil
-    }
-  / "\\" RegularExpressionNonTerminator
-
-RegularExpressionNonTerminator
-  = !LineTerminator SourceChar {
-      return string(c.text), nil
-    }
 
 Identifier
   // Allow any unicode letter possibly followed by any number of unicode letters, underscores and numbers.

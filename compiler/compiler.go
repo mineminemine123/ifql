@@ -112,6 +112,11 @@ func compile(n semantic.Node) (Evaluator, error) {
 			t: n.Type(),
 			s: n.Value,
 		}, nil
+	case *semantic.RegexpLiteral:
+		return &regexpEvaluator{
+			t: n.Type(),
+			r: n.Value,
+		}, nil
 	case *semantic.DateTimeLiteral:
 		return &timeEvaluator{
 			t:    n.Type(),

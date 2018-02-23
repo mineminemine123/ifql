@@ -367,6 +367,8 @@ const (
 	EmptyOperator
 	EqualOperator
 	NotEqualOperator
+	RegexpMatchOperator
+	NotRegexpMatchOperator
 	opEnd
 )
 
@@ -822,6 +824,8 @@ var OperatorTokens = map[OperatorKind]string{
 	StartsWithOperator:       "startswith",
 	EqualOperator:            "==",
 	NotEqualOperator:         "!=",
+	RegexpMatchOperator:      "=~",
+	NotRegexpMatchOperator:   "!~",
 }
 
 // LogicalOperatorTokens converts LogicalOperatorKind to string
