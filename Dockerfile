@@ -1,4 +1,4 @@
-FROM golang:1.9.2 as builder
+FROM golang:1.10 as builder
 ENV GOPATH /
 RUN go get github.com/golang/dep/...
 ADD . /src/github.com/influxdata/ifql

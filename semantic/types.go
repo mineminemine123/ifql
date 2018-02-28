@@ -57,7 +57,7 @@ const (
 	Bool
 	Time
 	Duration
-	Regex
+	Regexp
 	Array
 	Object
 	Function
@@ -73,7 +73,7 @@ var kindNames = []string{
 	Bool:     "bool",
 	Time:     "time",
 	Duration: "duration",
-	Regex:    "regex",
+	Regexp:   "regexp",
 	Array:    "array",
 	Object:   "object",
 	Function: "function",

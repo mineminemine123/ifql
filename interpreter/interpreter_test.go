@@ -186,6 +186,30 @@ func TestEval(t *testing.T) {
 			six() |> plusOne() == 7.0 or fail()
 			`,
 		},
+		{
+			name: "regex match",
+			query: `
+			"abba" =~ /^a.*a$/ or fail()
+			`,
+		},
+		{
+			name: "regex not match",
+			query: `
+			"abc" =~ /^a.*a$/ and fail()
+			`,
+		},
+		{
+			name: "not regex match",
+			query: `
+			"abc" !~ /^a.*a$/ or fail()
+			`,
+		},
+		{
+			name: "not regex not match",
+			query: `
+			"abba" !~ /^a.*a$/ and fail()
+			`,
+		},
 	}
 
 	for _, tc := range testCases {

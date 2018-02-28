@@ -47,8 +47,8 @@ func (*DateTimeLiteral) node()        {}
 func (*DurationLiteral) node()        {}
 func (*FloatLiteral) node()           {}
 func (*IntegerLiteral) node()         {}
-func (*RegexpLiteral) node()          {}
 func (*StringLiteral) node()          {}
+func (*RegexpLiteral) node()          {}
 func (*UnsignedIntegerLiteral) node() {}
 
 type Statement interface {
@@ -685,7 +685,7 @@ type RegexpLiteral struct {
 }
 
 func (*RegexpLiteral) NodeType() string { return "RegexpLiteral" }
-func (*RegexpLiteral) Type() Type       { return Regex }
+func (*RegexpLiteral) Type() Type       { return Regexp }
 
 func (l *RegexpLiteral) Copy() Node {
 	if l == nil {
@@ -1140,6 +1140,7 @@ func analyzeBinaryExpression(binary *ast.BinaryExpression, declarations Declarat
 		Right:    right,
 	}, nil
 }
+
 func analyzeUnaryExpression(unary *ast.UnaryExpression, declarations DeclarationScope) (*UnaryExpression, error) {
 	arg, err := analyzeExpression(unary.Argument, declarations)
 	if err != nil {

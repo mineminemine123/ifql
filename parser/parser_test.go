@@ -1,6 +1,7 @@
 package parser_test
 
 import (
+	"regexp"
 	"testing"
 	"time"
 
@@ -57,6 +58,55 @@ func TestParse(t *testing.T) {
 						Expression: &ast.CallExpression{
 							Callee: &ast.Identifier{
 								Name: "tan2",
+							},
+						},
+					},
+				},
+			},
+		},
+		{
+			name: "regex literal",
+			raw:  `/.*/`,
+			want: &ast.Program{
+				Body: []ast.Statement{
+					&ast.ExpressionStatement{
+						Expression: &ast.RegexpLiteral{
+							Value: regexp.MustCompile(".*"),
+						},
+					},
+				},
+			},
+		},
+		{
+			name: "regex literal with escape sequence",
+			raw:  `/a\/b\\c\d/`,
+			want: &ast.Program{
+				Body: []ast.Statement{
+					&ast.ExpressionStatement{
+						Expression: &ast.RegexpLiteral{
+							Value: regexp.MustCompile(`a/b\\c\d`),
+						},
+					},
+				},
+			},
+		},
+		{
+			name: "regex match operators",
+			raw:  `"a" =~ /.*/ and "b" !~ /c/`,
+			want: &ast.Program{
+				Body: []ast.Statement{
+					&ast.ExpressionStatement{
+						Expression: &ast.LogicalExpression{
+							Operator: ast.AndOperator,
+							Left: &ast.BinaryExpression{
+								Operator: ast.RegexpMatchOperator,
+								Left:     &ast.StringLiteral{Value: "a"},
+								Right:    &ast.RegexpLiteral{Value: regexp.MustCompile(".*")},
+							},
+							Right: &ast.BinaryExpression{
+								Operator: ast.NotRegexpMatchOperator,
+								Left:     &ast.StringLiteral{Value: "b"},
+								Right:    &ast.RegexpLiteral{Value: regexp.MustCompile("c")},
 							},
 						},
 					},

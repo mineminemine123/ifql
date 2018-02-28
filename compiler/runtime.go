@@ -2,6 +2,7 @@ package compiler
 
 import (
 	"fmt"
+	"regexp"
 
 	"github.com/influxdata/ifql/ast"
 	"github.com/influxdata/ifql/semantic"
@@ -14,6 +15,7 @@ type Evaluator interface {
 	EvalUInt(scope Scope) uint64
 	EvalFloat(scope Scope) float64
 	EvalString(scope Scope) string
+	EvalRegexp(scope Scope) *regexp.Regexp
 	EvalTime(scope Scope) Time
 	EvalObject(scope Scope) *Object
 }
@@ -26,6 +28,7 @@ type Func interface {
 	EvalUInt(scope Scope) (uint64, error)
 	EvalFloat(scope Scope) (float64, error)
 	EvalString(scope Scope) (string, error)
+	EvalRegexp(scope Scope) (*regexp.Regexp, error)
 	EvalTime(scope Scope) (Time, error)
 	EvalObject(scope Scope) (*Object, error)
 }
@@ -67,6 +70,8 @@ func (c compiledFn) Eval(scope Scope) (Value, error) {
 		val = c.root.EvalFloat(scope)
 	case semantic.String:
 		val = c.root.EvalString(scope)
+	case semantic.Regexp:
+		val = c.root.EvalRegexp(scope)
 	case semantic.Time:
 		val = c.root.EvalTime(scope)
 	case semantic.Object:
@@ -110,6 +115,12 @@ func (c compiledFn) EvalString(scope Scope) (string, error) {
 	}
 	return c.root.EvalString(scope), nil
 }
+func (c compiledFn) EvalRegexp(scope Scope) (*regexp.Regexp, error) {
+	if err := c.validate(scope); err != nil {
+		return nil, err
+	}
+	return c.root.EvalRegexp(scope), nil
+}
 func (c compiledFn) EvalTime(scope Scope) (Time, error) {
 	if err := c.validate(scope); err != nil {
 		return 0, err
@@ -130,6 +141,7 @@ type Value interface {
 	UInt() uint64
 	Float() float64
 	Str() string
+	Regexp() *regexp.Regexp
 	Time() Time
 	Object() *Object
 }
@@ -156,6 +168,9 @@ func (v value) Float() float64 {
 }
 func (v value) Str() string {
 	return v.Value.(string)
+}
+func (v value) Regexp() *regexp.Regexp {
+	return v.Value.(*regexp.Regexp)
 }
 func (v value) Time() Time {
 	return v.Value.(Time)
@@ -194,6 +209,12 @@ func NewString(v string) Value {
 		Value: v,
 	}
 }
+func NewRegexp(v *regexp.Regexp) Value {
+	return value{
+		typ:   semantic.Regexp,
+		Value: v,
+	}
+}
 func NewTime(v Time) Value {
 	return value{
 		typ:   semantic.Time,
@@ -224,6 +245,9 @@ func (s Scope) GetFloat(name string) float64 {
 func (s Scope) GetString(name string) string {
 	return s[name].Str()
 }
+func (s Scope) GetRegexp(name string) *regexp.Regexp {
+	return s[name].Regexp()
+}
 func (s Scope) GetTime(name string) Time {
 	return s[name].Time()
 }
@@ -243,6 +267,8 @@ func eval(e Evaluator, scope Scope) Value {
 		return NewFloat(e.EvalFloat(scope))
 	case semantic.String:
 		return NewString(e.EvalString(scope))
+	case semantic.Regexp:
+		return NewRegexp(e.EvalRegexp(scope))
 	case semantic.Time:
 		return NewTime(e.EvalTime(scope))
 	default:
@@ -305,6 +331,11 @@ func (e *blockEvaluator) EvalString(scope Scope) string {
 	e.eval(scope)
 	return e.value.Str()
 }
+func (e *blockEvaluator) EvalRegexp(scope Scope) *regexp.Regexp {
+	checkKind(e.t.Kind(), semantic.Regexp)
+	e.eval(scope)
+	return e.value.Regexp()
+}
 
 func (e *blockEvaluator) EvalTime(scope Scope) Time {
 	checkKind(e.t.Kind(), semantic.Time)
@@ -359,6 +390,10 @@ func (e *declarationEvaluator) EvalString(scope Scope) string {
 	e.eval(scope)
 	return scope.GetString(e.id)
 }
+func (e *declarationEvaluator) EvalRegexp(scope Scope) *regexp.Regexp {
+	e.eval(scope)
+	return scope.GetRegexp(e.id)
+}
 
 func (e *declarationEvaluator) EvalTime(scope Scope) Time {
 	e.eval(scope)
@@ -397,6 +432,9 @@ func (e *mapEvaluator) EvalFloat(scope Scope) float64 {
 
 func (e *mapEvaluator) EvalString(scope Scope) string {
 	panic(unexpectedKind(e.t.Kind(), semantic.String))
+}
+func (e *mapEvaluator) EvalRegexp(scope Scope) *regexp.Regexp {
+	panic(unexpectedKind(e.t.Kind(), semantic.Regexp))
 }
 
 func (e *mapEvaluator) EvalTime(scope Scope) Time {
@@ -462,6 +500,9 @@ func (o *Object) Float() float64 {
 func (o *Object) Str() string {
 	panic("map is not a string")
 }
+func (o *Object) Regexp() *regexp.Regexp {
+	panic("map is not a regular expression")
+}
 
 func (o *Object) Time() Time {
 	panic("map is not a time")
@@ -506,6 +547,9 @@ func (e *logicalEvaluator) EvalFloat(scope Scope) float64 {
 
 func (e *logicalEvaluator) EvalString(scope Scope) string {
 	panic(unexpectedKind(e.t.Kind(), semantic.String))
+}
+func (e *logicalEvaluator) EvalRegexp(scope Scope) *regexp.Regexp {
+	panic(unexpectedKind(e.t.Kind(), semantic.Regexp))
 }
 
 func (e *logicalEvaluator) EvalTime(scope Scope) Time {
@@ -552,6 +596,10 @@ func (e *binaryEvaluator) EvalString(scope Scope) string {
 	return e.f(scope, e.left, e.right).Str()
 }
 
+func (e *binaryEvaluator) EvalRegexp(scope Scope) *regexp.Regexp {
+	panic(unexpectedKind(e.t.Kind(), semantic.Regexp))
+}
+
 func (e *binaryEvaluator) EvalTime(scope Scope) Time {
 	return e.f(scope, e.left, e.right).Time()
 }
@@ -590,6 +638,9 @@ func (e *unaryEvaluator) EvalFloat(scope Scope) float64 {
 func (e *unaryEvaluator) EvalString(scope Scope) string {
 	panic(unexpectedKind(e.t.Kind(), semantic.String))
 }
+func (e *unaryEvaluator) EvalRegexp(scope Scope) *regexp.Regexp {
+	panic(unexpectedKind(e.t.Kind(), semantic.Regexp))
+}
 
 func (e *unaryEvaluator) EvalTime(scope Scope) Time {
 	panic(unexpectedKind(e.t.Kind(), semantic.Time))
@@ -627,6 +678,10 @@ func (e *integerEvaluator) EvalString(scope Scope) string {
 	panic(unexpectedKind(e.t.Kind(), semantic.String))
 }
 
+func (e *integerEvaluator) EvalRegexp(scope Scope) *regexp.Regexp {
+	panic(unexpectedKind(e.t.Kind(), semantic.Regexp))
+}
+
 func (e *integerEvaluator) EvalTime(scope Scope) Time {
 	panic(unexpectedKind(e.t.Kind(), semantic.Time))
 }
@@ -662,11 +717,55 @@ func (e *stringEvaluator) EvalFloat(scope Scope) float64 {
 func (e *stringEvaluator) EvalString(scope Scope) string {
 	return e.s
 }
+func (e *stringEvaluator) EvalRegexp(scope Scope) *regexp.Regexp {
+	panic(unexpectedKind(e.t.Kind(), semantic.Regexp))
+}
 
 func (e *stringEvaluator) EvalTime(scope Scope) Time {
 	panic(unexpectedKind(e.t.Kind(), semantic.Time))
 }
 func (e *stringEvaluator) EvalObject(scope Scope) *Object {
+	panic(unexpectedKind(e.t.Kind(), semantic.Object))
+}
+
+type regexpEvaluator struct {
+	t semantic.Type
+	r *regexp.Regexp
+}
+
+func (e *regexpEvaluator) Type() semantic.Type {
+	return e.t
+}
+
+func (e *regexpEvaluator) EvalBool(scope Scope) bool {
+	panic(unexpectedKind(e.t.Kind(), semantic.Bool))
+}
+
+func (e *regexpEvaluator) EvalInt(scope Scope) int64 {
+	panic(unexpectedKind(e.t.Kind(), semantic.Int))
+}
+
+func (e *regexpEvaluator) EvalUInt(scope Scope) uint64 {
+	panic(unexpectedKind(e.t.Kind(), semantic.UInt))
+}
+
+func (e *regexpEvaluator) EvalFloat(scope Scope) float64 {
+	panic(unexpectedKind(e.t.Kind(), semantic.Float))
+}
+
+func (e *regexpEvaluator) EvalString(scope Scope) string {
+	panic(unexpectedKind(e.t.Kind(), semantic.String))
+}
+
+func (e *regexpEvaluator) EvalRegexp(scope Scope) *regexp.Regexp {
+	return e.r
+}
+
+func (e *regexpEvaluator) EvalTime(scope Scope) Time {
+	panic(unexpectedKind(e.t.Kind(), semantic.Time))
+}
+
+func (e *regexpEvaluator) EvalObject(scope Scope) *Object {
 	panic(unexpectedKind(e.t.Kind(), semantic.Object))
 }
 
@@ -697,6 +796,10 @@ func (e *booleanEvaluator) EvalFloat(scope Scope) float64 {
 
 func (e *booleanEvaluator) EvalString(scope Scope) string {
 	panic(unexpectedKind(e.t.Kind(), semantic.String))
+}
+
+func (e *booleanEvaluator) EvalRegexp(scope Scope) *regexp.Regexp {
+	panic(unexpectedKind(e.t.Kind(), semantic.Regexp))
 }
 
 func (e *booleanEvaluator) EvalTime(scope Scope) Time {
@@ -735,6 +838,10 @@ func (e *floatEvaluator) EvalString(scope Scope) string {
 	panic(unexpectedKind(e.t.Kind(), semantic.String))
 }
 
+func (e *floatEvaluator) EvalRegexp(scope Scope) *regexp.Regexp {
+	panic(unexpectedKind(e.t.Kind(), semantic.Regexp))
+}
+
 func (e *floatEvaluator) EvalTime(scope Scope) Time {
 	panic(unexpectedKind(e.t.Kind(), semantic.Time))
 }
@@ -769,6 +876,10 @@ func (e *timeEvaluator) EvalFloat(scope Scope) float64 {
 
 func (e *timeEvaluator) EvalString(scope Scope) string {
 	panic(unexpectedKind(e.t.Kind(), semantic.String))
+}
+
+func (e *timeEvaluator) EvalRegexp(scope Scope) *regexp.Regexp {
+	panic(unexpectedKind(e.t.Kind(), semantic.Regexp))
 }
 
 func (e *timeEvaluator) EvalTime(scope Scope) Time {
@@ -807,6 +918,10 @@ func (e *identifierEvaluator) EvalString(scope Scope) string {
 	return scope.GetString(e.name)
 }
 
+func (e *identifierEvaluator) EvalRegexp(scope Scope) *regexp.Regexp {
+	return scope.GetRegexp(e.name)
+}
+
 func (e *identifierEvaluator) EvalTime(scope Scope) Time {
 	return scope.GetTime(e.name)
 }
@@ -842,6 +957,9 @@ func (e *memberEvaluator) EvalFloat(scope Scope) float64 {
 
 func (e *memberEvaluator) EvalString(scope Scope) string {
 	return e.object.EvalObject(scope).Get(e.property).Str()
+}
+func (e *memberEvaluator) EvalRegexp(scope Scope) *regexp.Regexp {
+	return e.object.EvalObject(scope).Get(e.property).Regexp()
 }
 
 func (e *memberEvaluator) EvalTime(scope Scope) Time {
@@ -1697,6 +1815,50 @@ var binaryFuncs = map[binarySignature]struct {
 			return value{
 				typ:   semantic.Bool,
 				Value: l != r,
+			}
+		},
+		ResultKind: semantic.Bool,
+	},
+	{Operator: ast.RegexpMatchOperator, Left: semantic.String, Right: semantic.Regexp}: {
+		Func: func(scope Scope, left, right Evaluator) Value {
+			l := left.EvalString(scope)
+			r := right.EvalRegexp(scope)
+			return value{
+				typ:   semantic.Bool,
+				Value: r.MatchString(l),
+			}
+		},
+		ResultKind: semantic.Bool,
+	},
+	{Operator: ast.RegexpMatchOperator, Left: semantic.Regexp, Right: semantic.String}: {
+		Func: func(scope Scope, left, right Evaluator) Value {
+			l := left.EvalRegexp(scope)
+			r := right.EvalString(scope)
+			return value{
+				typ:   semantic.Bool,
+				Value: l.MatchString(r),
+			}
+		},
+		ResultKind: semantic.Bool,
+	},
+	{Operator: ast.NotRegexpMatchOperator, Left: semantic.String, Right: semantic.Regexp}: {
+		Func: func(scope Scope, left, right Evaluator) Value {
+			l := left.EvalString(scope)
+			r := right.EvalRegexp(scope)
+			return value{
+				typ:   semantic.Bool,
+				Value: !r.MatchString(l),
+			}
+		},
+		ResultKind: semantic.Bool,
+	},
+	{Operator: ast.NotRegexpMatchOperator, Left: semantic.Regexp, Right: semantic.String}: {
+		Func: func(scope Scope, left, right Evaluator) Value {
+			l := left.EvalRegexp(scope)
+			r := right.EvalString(scope)
+			return value{
+				typ:   semantic.Bool,
+				Value: !l.MatchString(r),
 			}
 		},
 		ResultKind: semantic.Bool,

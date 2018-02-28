@@ -304,12 +304,12 @@ func numberLiteral(text []byte, pos position) (*ast.FloatLiteral, error) {
 }
 
 func regexLiteral(chars interface{}, text []byte, pos position) (*ast.RegexpLiteral, error) {
-	var regex string
+	b := new(strings.Builder)
 	for _, char := range toIfaceSlice(chars) {
-		regex += char.(string)
+		b.Write(char.([]byte))
 	}
 
-	r, err := regexp.Compile(regex)
+	r, err := regexp.Compile(b.String())
 	if err != nil {
 		return nil, err
 	}
