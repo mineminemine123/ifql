@@ -1077,6 +1077,13 @@ var binaryFuncLookup = map[binaryFuncSignature]binaryFunc{
 		return NewFloatValue(l / r)
 	},
 
+	// String concatentation
+	{operator: ast.AdditionOperator, left: semantic.String, right: semantic.String}: func(lv, rv Value) Value {
+		l := lv.Value().(string)
+		r := rv.Value().(string)
+		return NewStringValue(l + r)
+	},
+
 	//---------------------
 	// Comparison Operators
 	//---------------------

@@ -24,6 +24,9 @@ var binaryTypesLookup = map[binarySignature]Kind{
 	{operator: ast.DivisionOperator, left: UInt, right: UInt}:         UInt,
 	{operator: ast.DivisionOperator, left: Float, right: Float}:       Float,
 
+	// String concatentation
+	{operator: ast.AdditionOperator, left: String, right: String}: String,
+
 	//---------------------
 	// Comparison Operators
 	//---------------------

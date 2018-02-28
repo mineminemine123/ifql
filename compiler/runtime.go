@@ -1110,6 +1110,19 @@ var binaryFuncs = map[binarySignature]struct {
 		ResultKind: semantic.Float,
 	},
 
+	// String concatentation
+	{Operator: ast.AdditionOperator, Left: semantic.String, Right: semantic.String}: {
+		Func: func(scope Scope, left, right Evaluator) Value {
+			l := left.EvalString(scope)
+			r := right.EvalString(scope)
+			return value{
+				typ:   semantic.String,
+				Value: l + r,
+			}
+		},
+		ResultKind: semantic.String,
+	},
+
 	//---------------------
 	// Comparison Operators
 	//---------------------
