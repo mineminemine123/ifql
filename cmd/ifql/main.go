@@ -76,7 +76,10 @@ func main() {
 		if err != nil {
 			log.Fatal(err)
 		}
-		repl.Input(q)
+		err = repl.Input(q)
+		if err != nil {
+			fmt.Println(err)
+		}
 	default:
 		flag.Usage()
 		os.Exit(1)
