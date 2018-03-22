@@ -10,6 +10,10 @@ import (
 	"sync"
 	"syscall"
 
+	"io/ioutil"
+
+	"path/filepath"
+
 	prompt "github.com/c-bata/go-prompt"
 	"github.com/influxdata/ifql/functions"
 	"github.com/influxdata/ifql/interpreter"
@@ -104,6 +108,12 @@ func (r *REPL) completer(d prompt.Document) []prompt.Suggest {
 			s = append(s, prompt.Suggest{Text: n})
 		}
 	}
+
+	ifqlFiles := getIfqlFiles("./")
+	for _, fName := range ifqlFiles {
+		s = append(s, prompt.Suggest{Text: "@" + fName})
+	}
+
 	return prompt.FilterHasPrefix(s, d.GetWordBeforeCursor(), true)
 }
 
@@ -128,6 +138,15 @@ func (r *REPL) executeLine(t string, expectYield bool) (interpreter.Value, error
 	if t == "" {
 		return nil, nil
 	}
+
+	if t[0] == '@' {
+		q, err := LoadQuery(t)
+		if err != nil {
+			return nil, err
+		}
+		t = q
+	}
+
 	astProg, err := parser.NewAST(t)
 	if err != nil {
 		return nil, err
@@ -201,4 +220,42 @@ func (r *REPL) doQuery(spec *query.Spec) error {
 		}
 	}
 	return nil
+}
+
+func getIfqlFiles(rootpath string) []string {
+
+	list := make([]string, 0, 10)
+
+	err := filepath.Walk(rootpath, func(path string, info os.FileInfo, err error) error {
+		if info.IsDir() {
+			if path != rootpath {
+				list = append(list, path+string(os.PathSeparator))
+			}
+		}
+		if filepath.Ext(path) == ".ifql" {
+			list = append(list, path)
+		}
+		return nil
+	})
+	if err != nil {
+		fmt.Printf("walk error [%v]\n", err)
+	}
+	return list
+}
+
+func LoadQuery(q string) (string, error) {
+	if len(q) > 0 && q[0] == '@' {
+		f, err := os.Open(q[1:])
+		if err != nil {
+			return "", err
+		}
+		defer f.Close()
+
+		data, err := ioutil.ReadAll(f)
+		if err != nil {
+			return "", err
+		}
+		q = string(data)
+	}
+	return q, nil
 }
