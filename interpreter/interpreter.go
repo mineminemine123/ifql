@@ -710,6 +710,10 @@ func resolveValue(v Value) (semantic.Node, error) {
 		return &semantic.DateTimeLiteral{
 			Value: v.Value().(time.Time),
 		}, nil
+	case semantic.Regexp:
+		return &semantic.RegexpLiteral{
+			Value: v.Value().(*regexp.Regexp),
+		}, nil
 	case semantic.Duration:
 		return &semantic.DurationLiteral{
 			Value: v.Value().(time.Duration),
