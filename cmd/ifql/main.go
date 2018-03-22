@@ -3,7 +3,6 @@ package main
 import (
 	"flag"
 	"fmt"
-	"io/ioutil"
 	"log"
 	"math"
 	"os"
@@ -65,18 +64,18 @@ func main() {
 	if err != nil {
 		log.Fatal(err)
 	}
-	repl := repl.New(c)
+	replCmd := repl.New(c)
 
 	args := flag.Args()
 	switch len(args) {
 	case 0:
-		repl.Run()
+		replCmd.Run()
 	case 1:
-		q, err := loadQuery(args[0])
+		q, err := repl.LoadQuery(args[0])
 		if err != nil {
 			log.Fatal(err)
 		}
-		err = repl.Input(q)
+		err = replCmd.Input(q)
 		if err != nil {
 			fmt.Println(err)
 		}
@@ -84,21 +83,4 @@ func main() {
 		flag.Usage()
 		os.Exit(1)
 	}
-}
-
-func loadQuery(q string) (string, error) {
-	if len(q) > 0 && q[0] == '@' {
-		f, err := os.Open(q[1:])
-		if err != nil {
-			return "", err
-		}
-		defer f.Close()
-
-		data, err := ioutil.ReadAll(f)
-		if err != nil {
-			return "", err
-		}
-		q = string(data)
-	}
-	return q, nil
 }

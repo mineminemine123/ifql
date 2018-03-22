@@ -10,6 +10,8 @@ import (
 	"sync"
 	"syscall"
 
+	"io/ioutil"
+
 	prompt "github.com/c-bata/go-prompt"
 	"github.com/influxdata/ifql/functions"
 	"github.com/influxdata/ifql/interpreter"
@@ -128,6 +130,15 @@ func (r *REPL) executeLine(t string, expectYield bool) (interpreter.Value, error
 	if t == "" {
 		return nil, nil
 	}
+
+	if t[0] == '@' {
+		q, err := LoadQuery(t)
+		if err != nil {
+			return nil, err
+		}
+		t = q
+	}
+
 	astProg, err := parser.NewAST(t)
 	if err != nil {
 		return nil, err
@@ -201,4 +212,21 @@ func (r *REPL) doQuery(spec *query.Spec) error {
 		}
 	}
 	return nil
+}
+
+func LoadQuery(q string) (string, error) {
+	if len(q) > 0 && q[0] == '@' {
+		f, err := os.Open(q[1:])
+		if err != nil {
+			return "", err
+		}
+		defer f.Close()
+
+		data, err := ioutil.ReadAll(f)
+		if err != nil {
+			return "", err
+		}
+		q = string(data)
+	}
+	return q, nil
 }
