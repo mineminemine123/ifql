@@ -358,6 +358,10 @@ func (t *functionType) ReturnType() Type {
 }
 func (t *functionType) typ() {}
 
+func (t *functionType) Params() map[string]Type {
+	return t.params
+}
+
 func (t *functionType) equal(o *functionType) bool {
 	if t == o {
 		return true
