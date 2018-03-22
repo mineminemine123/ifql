@@ -12,6 +12,8 @@ import (
 
 	"io/ioutil"
 
+	"path/filepath"
+
 	prompt "github.com/c-bata/go-prompt"
 	"github.com/influxdata/ifql/functions"
 	"github.com/influxdata/ifql/interpreter"
@@ -106,6 +108,12 @@ func (r *REPL) completer(d prompt.Document) []prompt.Suggest {
 			s = append(s, prompt.Suggest{Text: n})
 		}
 	}
+
+	ifqlFiles := getIfqlFiles("./")
+	for _, fName := range ifqlFiles {
+		s = append(s, prompt.Suggest{Text: "@" + fName})
+	}
+
 	return prompt.FilterHasPrefix(s, d.GetWordBeforeCursor(), true)
 }
 
@@ -212,6 +220,27 @@ func (r *REPL) doQuery(spec *query.Spec) error {
 		}
 	}
 	return nil
+}
+
+func getIfqlFiles(rootpath string) []string {
+
+	list := make([]string, 0, 10)
+
+	err := filepath.Walk(rootpath, func(path string, info os.FileInfo, err error) error {
+		if info.IsDir() {
+			if path != rootpath {
+				list = append(list, path+string(os.PathSeparator))
+			}
+		}
+		if filepath.Ext(path) == ".ifql" {
+			list = append(list, path)
+		}
+		return nil
+	})
+	if err != nil {
+		fmt.Printf("walk error [%v]\n", err)
+	}
+	return list
 }
 
 func LoadQuery(q string) (string, error) {
