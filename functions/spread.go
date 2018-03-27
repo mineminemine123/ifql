@@ -24,7 +24,11 @@ func createSpreadOpSpec(args query.Arguments, a *query.Administration) (query.Op
 		return nil, err
 	}
 
-	return new(SpreadOpSpec), nil
+	s := new(SpreadOpSpec)
+	if err := s.AggregateConfig.ReadArgs(args); err != nil {
+		return nil, err
+	}
+	return s, nil
 }
 
 func newSpreadOp() query.OperationSpec {
@@ -33,7 +37,9 @@ func newSpreadOp() query.OperationSpec {
 
 // SpreadOpSpec defines the required arguments for IFQL.  Currently,
 // spread takes no arguments.
-type SpreadOpSpec struct{}
+type SpreadOpSpec struct {
+	execute.AggregateConfig
+}
 
 // Kind is used to lookup createSpreadOpSpec producing SpreadOpSpec
 func (s *SpreadOpSpec) Kind() query.OperationKind {
@@ -41,27 +47,38 @@ func (s *SpreadOpSpec) Kind() query.OperationKind {
 }
 
 func newSpreadProcedure(qs query.OperationSpec, pa plan.Administration) (plan.ProcedureSpec, error) {
-	_, ok := qs.(*SpreadOpSpec)
+	spec, ok := qs.(*SpreadOpSpec)
 	if !ok {
 		return nil, fmt.Errorf("invalid spec type %T", qs)
 	}
-	return &SpreadProcedureSpec{}, nil
+	return &SpreadProcedureSpec{
+		AggregateConfig: spec.AggregateConfig,
+	}, nil
 }
 
 // SpreadProcedureSpec is created when mapping from SpreadOpSpec.Kind
 // to a CreateProcedureSpec.
-type SpreadProcedureSpec struct{}
+type SpreadProcedureSpec struct {
+	execute.AggregateConfig
+}
 
 // Kind is used to lookup CreateTransformation producing SpreadAgg
 func (s *SpreadProcedureSpec) Kind() plan.ProcedureKind {
 	return SpreadKind
 }
 func (s *SpreadProcedureSpec) Copy() plan.ProcedureSpec {
-	return new(SpreadProcedureSpec)
+	return &SpreadProcedureSpec{
+		AggregateConfig: s.AggregateConfig,
+	}
 }
 
 func createSpreadTransformation(id execute.DatasetID, mode execute.AccumulationMode, spec plan.ProcedureSpec, a execute.Administration) (execute.Transformation, execute.Dataset, error) {
-	t, d := execute.NewAggregateTransformationAndDataset(id, mode, a.Bounds(), new(SpreadAgg), a.Allocator())
+	s, ok := spec.(*SpreadProcedureSpec)
+	if !ok {
+		return nil, nil, fmt.Errorf("invalid spec type %T", spec)
+	}
+
+	t, d := execute.NewAggregateTransformationAndDataset(id, mode, a.Bounds(), new(SpreadAgg), s.AggregateConfig, a.Allocator())
 	return t, d, nil
 }
 

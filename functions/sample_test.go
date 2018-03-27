@@ -15,9 +15,11 @@ func TestSampleOperation_Marshaling(t *testing.T) {
 	op := &query.Operation{
 		ID: "sample",
 		Spec: &functions.SampleOpSpec{
-			UseRowTime: true,
-			N:          5,
-			Pos:        0,
+			SelectorConfig: execute.SelectorConfig{
+				UseRowTime: true,
+			},
+			N:   5,
+			Pos: 0,
 		},
 	}
 

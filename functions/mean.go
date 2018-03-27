@@ -1,6 +1,7 @@
 package functions
 
 import (
+	"fmt"
 	"math"
 
 	"github.com/influxdata/ifql/query"
@@ -11,6 +12,7 @@ import (
 const MeanKind = "mean"
 
 type MeanOpSpec struct {
+	execute.AggregateConfig
 }
 
 var meanSignature = query.DefaultFunctionSignature()
@@ -26,7 +28,11 @@ func createMeanOpSpec(args query.Arguments, a *query.Administration) (query.Oper
 		return nil, err
 	}
 
-	return new(MeanOpSpec), nil
+	spec := &MeanOpSpec{}
+	if err := spec.AggregateConfig.ReadArgs(args); err != nil {
+		return nil, err
+	}
+	return spec, nil
 }
 
 func newMeanOp() query.OperationSpec {
@@ -38,17 +44,26 @@ func (s *MeanOpSpec) Kind() query.OperationKind {
 }
 
 type MeanProcedureSpec struct {
+	execute.AggregateConfig
 }
 
-func newMeanProcedure(query.OperationSpec, plan.Administration) (plan.ProcedureSpec, error) {
-	return new(MeanProcedureSpec), nil
+func newMeanProcedure(qs query.OperationSpec, a plan.Administration) (plan.ProcedureSpec, error) {
+	spec, ok := qs.(*MeanOpSpec)
+	if !ok {
+		return nil, fmt.Errorf("invalid spec type %T", qs)
+	}
+	return &MeanProcedureSpec{
+		AggregateConfig: spec.AggregateConfig,
+	}, nil
 }
 
 func (s *MeanProcedureSpec) Kind() plan.ProcedureKind {
 	return MeanKind
 }
 func (s *MeanProcedureSpec) Copy() plan.ProcedureSpec {
-	return new(MeanProcedureSpec)
+	return &MeanProcedureSpec{
+		AggregateConfig: s.AggregateConfig,
+	}
 }
 
 type MeanAgg struct {
@@ -57,7 +72,11 @@ type MeanAgg struct {
 }
 
 func createMeanTransformation(id execute.DatasetID, mode execute.AccumulationMode, spec plan.ProcedureSpec, a execute.Administration) (execute.Transformation, execute.Dataset, error) {
-	t, d := execute.NewAggregateTransformationAndDataset(id, mode, a.Bounds(), new(MeanAgg), a.Allocator())
+	s, ok := spec.(*MeanProcedureSpec)
+	if !ok {
+		return nil, nil, fmt.Errorf("invalid spec type %T", spec)
+	}
+	t, d := execute.NewAggregateTransformationAndDataset(id, mode, a.Bounds(), new(MeanAgg), s.AggregateConfig, a.Allocator())
 	return t, d, nil
 }
 

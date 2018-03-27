@@ -14,10 +14,9 @@ import (
 const SampleKind = "sample"
 
 type SampleOpSpec struct {
-	Column     string `json:"column"`
-	UseRowTime bool   `json:"useRowtime"`
-	N          int64  `json:"n"`
-	Pos        int64  `json:"pos"`
+	N   int64 `json:"n"`
+	Pos int64 `json:"pos"`
+	execute.SelectorConfig
 }
 
 var sampleSignature = query.DefaultFunctionSignature()
@@ -38,16 +37,6 @@ func createSampleOpSpec(args query.Arguments, a *query.Administration) (query.Op
 	}
 
 	spec := new(SampleOpSpec)
-	if c, ok, err := args.GetString("column"); err != nil {
-		return nil, err
-	} else if ok {
-		spec.Column = c
-	}
-	if useRowTime, ok, err := args.GetBool("useRowTime"); err != nil {
-		return nil, err
-	} else if ok {
-		spec.UseRowTime = useRowTime
-	}
 
 	n, err := args.GetRequiredInt("n")
 	if err != nil {
@@ -63,6 +52,10 @@ func createSampleOpSpec(args query.Arguments, a *query.Administration) (query.Op
 		spec.Pos = -1
 	}
 
+	if err := spec.SelectorConfig.ReadArgs(args); err != nil {
+		return nil, err
+	}
+
 	return spec, nil
 }
 
@@ -75,10 +68,9 @@ func (s *SampleOpSpec) Kind() query.OperationKind {
 }
 
 type SampleProcedureSpec struct {
-	Column     string
-	UseRowTime bool
-	N          int64
-	Pos        int64
+	N   int64
+	Pos int64
+	execute.SelectorConfig
 }
 
 func newSampleProcedure(qs query.OperationSpec, pa plan.Administration) (plan.ProcedureSpec, error) {
@@ -87,10 +79,9 @@ func newSampleProcedure(qs query.OperationSpec, pa plan.Administration) (plan.Pr
 		return nil, fmt.Errorf("invalid spec type %T", qs)
 	}
 	return &SampleProcedureSpec{
-		Column:     spec.Column,
-		UseRowTime: spec.UseRowTime,
-		N:          spec.N,
-		Pos:        spec.Pos,
+		N:              spec.N,
+		Pos:            spec.Pos,
+		SelectorConfig: spec.SelectorConfig,
 	}, nil
 }
 
@@ -99,10 +90,9 @@ func (s *SampleProcedureSpec) Kind() plan.ProcedureKind {
 }
 func (s *SampleProcedureSpec) Copy() plan.ProcedureSpec {
 	ns := new(SampleProcedureSpec)
-	ns.Column = s.Column
-	ns.UseRowTime = s.UseRowTime
 	ns.N = s.N
 	ns.Pos = s.Pos
+	ns.SelectorConfig = s.SelectorConfig
 	return ns
 }
 
@@ -124,7 +114,7 @@ func createSampleTransformation(id execute.DatasetID, mode execute.AccumulationM
 		N:   int(ps.N),
 		Pos: int(ps.Pos),
 	}
-	t, d := execute.NewIndexSelectorTransformationAndDataset(id, mode, a.Bounds(), ss, ps.Column, ps.UseRowTime, a.Allocator())
+	t, d := execute.NewIndexSelectorTransformationAndDataset(id, mode, a.Bounds(), ss, ps.SelectorConfig, a.Allocator())
 	return t, d, nil
 }
 

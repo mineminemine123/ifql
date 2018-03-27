@@ -1,6 +1,7 @@
 package functions
 
 import (
+	"fmt"
 	"math"
 
 	"github.com/influxdata/ifql/query"
@@ -11,6 +12,7 @@ import (
 const SkewKind = "skew"
 
 type SkewOpSpec struct {
+	execute.AggregateConfig
 }
 
 var skewSignature = query.DefaultFunctionSignature()
@@ -26,7 +28,12 @@ func createSkewOpSpec(args query.Arguments, a *query.Administration) (query.Oper
 		return nil, err
 	}
 
-	return new(SkewOpSpec), nil
+	s := new(SkewOpSpec)
+	if err := s.AggregateConfig.ReadArgs(args); err != nil {
+		return nil, err
+	}
+
+	return s, nil
 }
 
 func newSkewOp() query.OperationSpec {
@@ -38,17 +45,26 @@ func (s *SkewOpSpec) Kind() query.OperationKind {
 }
 
 type SkewProcedureSpec struct {
+	execute.AggregateConfig
 }
 
-func newSkewProcedure(query.OperationSpec, plan.Administration) (plan.ProcedureSpec, error) {
-	return new(SkewProcedureSpec), nil
+func newSkewProcedure(qs query.OperationSpec, a plan.Administration) (plan.ProcedureSpec, error) {
+	spec, ok := qs.(*SkewOpSpec)
+	if !ok {
+		return nil, fmt.Errorf("invalid spec type %T", qs)
+	}
+	return &SkewProcedureSpec{
+		AggregateConfig: spec.AggregateConfig,
+	}, nil
 }
 
 func (s *SkewProcedureSpec) Kind() plan.ProcedureKind {
 	return SkewKind
 }
 func (s *SkewProcedureSpec) Copy() plan.ProcedureSpec {
-	return new(SkewProcedureSpec)
+	return &SkewProcedureSpec{
+		AggregateConfig: s.AggregateConfig,
+	}
 }
 
 type SkewAgg struct {
@@ -56,7 +72,11 @@ type SkewAgg struct {
 }
 
 func createSkewTransformation(id execute.DatasetID, mode execute.AccumulationMode, spec plan.ProcedureSpec, a execute.Administration) (execute.Transformation, execute.Dataset, error) {
-	t, d := execute.NewAggregateTransformationAndDataset(id, mode, a.Bounds(), new(SkewAgg), a.Allocator())
+	s, ok := spec.(*SkewProcedureSpec)
+	if !ok {
+		return nil, nil, fmt.Errorf("invalid spec type %T", spec)
+	}
+	t, d := execute.NewAggregateTransformationAndDataset(id, mode, a.Bounds(), new(SkewAgg), s.AggregateConfig, a.Allocator())
 	return t, d, nil
 }
 

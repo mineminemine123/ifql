@@ -17,7 +17,9 @@ func TestFirstOperation_Marshaling(t *testing.T) {
 	op := &query.Operation{
 		ID: "first",
 		Spec: &functions.FirstOpSpec{
-			UseRowTime: true,
+			SelectorConfig: execute.SelectorConfig{
+				UseRowTime: true,
+			},
 		},
 	}
 

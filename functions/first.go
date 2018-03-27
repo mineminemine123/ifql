@@ -12,8 +12,7 @@ import (
 const FirstKind = "first"
 
 type FirstOpSpec struct {
-	Column     string `json:"column"`
-	UseRowTime bool   `json:"useRowtime"`
+	execute.SelectorConfig
 }
 
 var firstSignature = query.DefaultFunctionSignature()
@@ -34,15 +33,8 @@ func createFirstOpSpec(args query.Arguments, a *query.Administration) (query.Ope
 	}
 
 	spec := new(FirstOpSpec)
-	if c, ok, err := args.GetString("column"); err != nil {
+	if err := spec.SelectorConfig.ReadArgs(args); err != nil {
 		return nil, err
-	} else if ok {
-		spec.Column = c
-	}
-	if useRowTime, ok, err := args.GetBool("useRowTime"); err != nil {
-		return nil, err
-	} else if ok {
-		spec.UseRowTime = useRowTime
 	}
 
 	return spec, nil
@@ -57,8 +49,7 @@ func (s *FirstOpSpec) Kind() query.OperationKind {
 }
 
 type FirstProcedureSpec struct {
-	Column     string
-	UseRowTime bool
+	execute.SelectorConfig
 }
 
 func newFirstProcedure(qs query.OperationSpec, pa plan.Administration) (plan.ProcedureSpec, error) {
@@ -67,8 +58,7 @@ func newFirstProcedure(qs query.OperationSpec, pa plan.Administration) (plan.Pro
 		return nil, fmt.Errorf("invalid spec type %T", qs)
 	}
 	return &FirstProcedureSpec{
-		Column:     spec.Column,
-		UseRowTime: spec.UseRowTime,
+		SelectorConfig: spec.SelectorConfig,
 	}, nil
 }
 
@@ -114,8 +104,7 @@ func (s *FirstProcedureSpec) PushDown(root *plan.Procedure, dup func() *plan.Pro
 func (s *FirstProcedureSpec) Copy() plan.ProcedureSpec {
 	ns := new(FirstProcedureSpec)
 	*ns = *s
-	ns.Column = s.Column
-	ns.UseRowTime = s.UseRowTime
+	ns.SelectorConfig = s.SelectorConfig
 	return ns
 }
 
@@ -128,7 +117,7 @@ func createFirstTransformation(id execute.DatasetID, mode execute.AccumulationMo
 	if !ok {
 		return nil, nil, fmt.Errorf("invalid spec type %T", ps)
 	}
-	t, d := execute.NewIndexSelectorTransformationAndDataset(id, mode, a.Bounds(), new(FirstSelector), ps.Column, ps.UseRowTime, a.Allocator())
+	t, d := execute.NewIndexSelectorTransformationAndDataset(id, mode, a.Bounds(), new(FirstSelector), ps.SelectorConfig, a.Allocator())
 	return t, d, nil
 }
 
