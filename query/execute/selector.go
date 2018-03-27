@@ -2,15 +2,45 @@ package execute
 
 import (
 	"fmt"
+
+	"github.com/influxdata/ifql/query"
+	"github.com/pkg/errors"
 )
 
 type selectorTransformation struct {
-	d          Dataset
-	cache      BlockBuilderCache
-	bounds     Bounds
-	useRowTime bool
+	d      Dataset
+	cache  BlockBuilderCache
+	bounds Bounds
 
-	colLabel string
+	config SelectorConfig
+}
+
+type SelectorConfig struct {
+	Column       string `json:"column"`
+	UseRowTime   bool   `json:"useRowTime"`
+	UseStartTime bool   `json:"useStartTime"`
+}
+
+func (c *SelectorConfig) ReadArgs(args query.Arguments) error {
+	if col, ok, err := args.GetString("column"); err != nil {
+		return err
+	} else if ok {
+		c.Column = col
+	}
+	if useRowTime, ok, err := args.GetBool("useRowTime"); err != nil {
+		return err
+	} else if ok {
+		c.UseRowTime = useRowTime
+	}
+	if useStartTime, ok, err := args.GetBool("useStartTime"); err != nil {
+		return err
+	} else if ok {
+		c.UseStartTime = useStartTime
+	}
+	if c.UseStartTime && c.UseRowTime {
+		return errors.New("cannot use both row time and start time")
+	}
+	return nil
 }
 
 type rowSelectorTransformation struct {
@@ -22,40 +52,39 @@ type indexSelectorTransformation struct {
 	selector IndexSelector
 }
 
-func NewRowSelectorTransformationAndDataset(id DatasetID, mode AccumulationMode, bounds Bounds, selector RowSelector, colLabel string, useRowTime bool, a *Allocator) (*rowSelectorTransformation, Dataset) {
+func NewRowSelectorTransformationAndDataset(id DatasetID, mode AccumulationMode, bounds Bounds, selector RowSelector, config SelectorConfig, a *Allocator) (*rowSelectorTransformation, Dataset) {
 	cache := NewBlockBuilderCache(a)
 	d := NewDataset(id, mode, cache)
-	return NewRowSelectorTransformation(d, cache, bounds, selector, colLabel, useRowTime), d
+	return NewRowSelectorTransformation(d, cache, bounds, selector, config), d
 }
-func NewRowSelectorTransformation(d Dataset, c BlockBuilderCache, bounds Bounds, selector RowSelector, colLabel string, useRowTime bool) *rowSelectorTransformation {
+func NewRowSelectorTransformation(d Dataset, c BlockBuilderCache, bounds Bounds, selector RowSelector, config SelectorConfig) *rowSelectorTransformation {
 	return &rowSelectorTransformation{
-		selectorTransformation: newSelectorTransformation(d, c, bounds, colLabel, useRowTime),
+		selectorTransformation: newSelectorTransformation(d, c, bounds, config),
 		selector:               selector,
 	}
 }
 
-func NewIndexSelectorTransformationAndDataset(id DatasetID, mode AccumulationMode, bounds Bounds, selector IndexSelector, colLabel string, useRowTime bool, a *Allocator) (*indexSelectorTransformation, Dataset) {
+func NewIndexSelectorTransformationAndDataset(id DatasetID, mode AccumulationMode, bounds Bounds, selector IndexSelector, config SelectorConfig, a *Allocator) (*indexSelectorTransformation, Dataset) {
 	cache := NewBlockBuilderCache(a)
 	d := NewDataset(id, mode, cache)
-	return NewIndexSelectorTransformation(d, cache, bounds, selector, colLabel, useRowTime), d
+	return NewIndexSelectorTransformation(d, cache, bounds, selector, config), d
 }
-func NewIndexSelectorTransformation(d Dataset, c BlockBuilderCache, bounds Bounds, selector IndexSelector, colLabel string, useRowTime bool) *indexSelectorTransformation {
+func NewIndexSelectorTransformation(d Dataset, c BlockBuilderCache, bounds Bounds, selector IndexSelector, config SelectorConfig) *indexSelectorTransformation {
 	return &indexSelectorTransformation{
-		selectorTransformation: newSelectorTransformation(d, c, bounds, colLabel, useRowTime),
+		selectorTransformation: newSelectorTransformation(d, c, bounds, config),
 		selector:               selector,
 	}
 }
 
-func newSelectorTransformation(d Dataset, c BlockBuilderCache, bounds Bounds, colLabel string, useRowTime bool) selectorTransformation {
-	if colLabel == "" {
-		colLabel = DefaultValueColLabel
+func newSelectorTransformation(d Dataset, c BlockBuilderCache, bounds Bounds, config SelectorConfig) selectorTransformation {
+	if config.Column == "" {
+		config.Column = DefaultValueColLabel
 	}
 	return selectorTransformation{
-		d:          d,
-		cache:      c,
-		bounds:     bounds,
-		colLabel:   colLabel,
-		useRowTime: useRowTime,
+		d:      d,
+		cache:  c,
+		bounds: bounds,
+		config: config,
 	}
 }
 
@@ -84,7 +113,7 @@ func (t *selectorTransformation) setupBuilder(b Block) (BlockBuilder, int) {
 	}
 
 	cols := builder.Cols()
-	valueIdx := ColIdx(t.colLabel, cols)
+	valueIdx := ColIdx(t.config.Column, cols)
 	return builder, valueIdx
 }
 
@@ -92,37 +121,44 @@ func (t *indexSelectorTransformation) Process(id DatasetID, b Block) error {
 	builder, valueIdx := t.setupBuilder(b)
 	valueCol := builder.Cols()[valueIdx]
 
+	var newTime Time
+	if t.config.UseStartTime {
+		newTime = b.Bounds().Start
+	} else {
+		newTime = b.Bounds().Stop
+	}
+
 	values := b.Col(valueIdx)
 	switch valueCol.Type {
 	case TBool:
 		s := t.selector.NewBoolSelector()
 		values.DoBool(func(vs []bool, rr RowReader) {
 			selected := s.DoBool(vs)
-			t.appendSelected(selected, builder, rr, b.Bounds().Stop)
+			t.appendSelected(selected, builder, rr, newTime)
 		})
 	case TInt:
 		s := t.selector.NewIntSelector()
 		values.DoInt(func(vs []int64, rr RowReader) {
 			selected := s.DoInt(vs)
-			t.appendSelected(selected, builder, rr, b.Bounds().Stop)
+			t.appendSelected(selected, builder, rr, newTime)
 		})
 	case TUInt:
 		s := t.selector.NewUIntSelector()
 		values.DoUInt(func(vs []uint64, rr RowReader) {
 			selected := s.DoUInt(vs)
-			t.appendSelected(selected, builder, rr, b.Bounds().Stop)
+			t.appendSelected(selected, builder, rr, newTime)
 		})
 	case TFloat:
 		s := t.selector.NewFloatSelector()
 		values.DoFloat(func(vs []float64, rr RowReader) {
 			selected := s.DoFloat(vs)
-			t.appendSelected(selected, builder, rr, b.Bounds().Stop)
+			t.appendSelected(selected, builder, rr, newTime)
 		})
 	case TString:
 		s := t.selector.NewStringSelector()
 		values.DoString(func(vs []string, rr RowReader) {
 			selected := s.DoString(vs)
-			t.appendSelected(selected, builder, rr, b.Bounds().Stop)
+			t.appendSelected(selected, builder, rr, newTime)
 		})
 	}
 	return nil
@@ -131,7 +167,7 @@ func (t *indexSelectorTransformation) Process(id DatasetID, b Block) error {
 func (t *rowSelectorTransformation) Process(id DatasetID, b Block) error {
 	builder, valueIdx := t.setupBuilder(b)
 	if valueIdx < 0 {
-		return fmt.Errorf("no column %q exists", t.colLabel)
+		return fmt.Errorf("no column %q exists", t.config.Column)
 	}
 	valueCol := builder.Cols()[valueIdx]
 
@@ -161,11 +197,17 @@ func (t *rowSelectorTransformation) Process(id DatasetID, b Block) error {
 	}
 
 	rows := rower.Rows()
-	t.appendRows(builder, rows, b.Bounds().Stop)
+	var newTime Time
+	if t.config.UseStartTime {
+		newTime = b.Bounds().Start
+	} else {
+		newTime = b.Bounds().Stop
+	}
+	t.appendRows(builder, rows, newTime)
 	return nil
 }
 
-func (t *indexSelectorTransformation) appendSelected(selected []int, builder BlockBuilder, rr RowReader, stop Time) {
+func (t *indexSelectorTransformation) appendSelected(selected []int, builder BlockBuilder, rr RowReader, newTime Time) {
 	if len(selected) == 0 {
 		return
 	}
@@ -184,11 +226,11 @@ func (t *indexSelectorTransformation) appendSelected(selected []int, builder Blo
 			case TString:
 				builder.AppendString(j, rr.AtString(i, j))
 			case TTime:
-				time := stop
-				if t.useRowTime {
-					time = rr.AtTime(i, j)
+				nt := newTime
+				if t.config.UseRowTime {
+					nt = rr.AtTime(i, j)
 				}
-				builder.AppendTime(j, time)
+				builder.AppendTime(j, nt)
 			default:
 				PanicUnknownType(c.Type)
 			}
@@ -196,7 +238,7 @@ func (t *indexSelectorTransformation) appendSelected(selected []int, builder Blo
 	}
 }
 
-func (t *rowSelectorTransformation) appendRows(builder BlockBuilder, rows []Row, stop Time) {
+func (t *rowSelectorTransformation) appendRows(builder BlockBuilder, rows []Row, newTime Time) {
 	cols := builder.Cols()
 	for j, c := range cols {
 		for _, row := range rows {
@@ -213,10 +255,10 @@ func (t *rowSelectorTransformation) appendRows(builder BlockBuilder, rows []Row,
 			case TString:
 				builder.AppendString(j, v.(string))
 			case TTime:
-				if t.useRowTime {
+				if t.config.UseRowTime {
 					builder.AppendTime(j, v.(Time))
 				} else {
-					builder.AppendTime(j, stop)
+					builder.AppendTime(j, newTime)
 				}
 			default:
 				PanicUnknownType(c.Type)

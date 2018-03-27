@@ -130,11 +130,21 @@ Example: `from(db:"telegraf")`
 
 Counts the number of results
 
+##### options
+
+*  `useStartTime` boolean
+Use the start time as the timestamp of the resulting aggregate.
+
 Example: `from(db:"telegraf") |> count()`
 
 #### first
 
 Returns the first result of the query
+
+##### options
+
+*  `useStartTime` boolean
+Use the start time as the timestamp of the resulting aggregate.
 
 Example: `from(db:"telegraf") |> first()`
 
@@ -187,7 +197,13 @@ The parameter is a map, which uses the same keys found in the `tables` map.
 The function is called for each joined set of records from the tables.
 
 #### last
+
 Returns the last result of the query
+
+##### options
+
+*  `useStartTime` boolean
+Use the start time as the timestamp of the resulting aggregate.
 
 Example: `from(db: "telegraf") |> last()`
 
@@ -232,6 +248,11 @@ from(db:"foo")
 
 Returns the max value within the results
 
+##### options
+
+*  `useStartTime` boolean
+Use the start time as the timestamp of the resulting aggregate.
+
 Example:
 ```
 from(db:"foo")
@@ -244,7 +265,13 @@ from(db:"foo")
 ```
 
 #### mean
+
 Returns the mean of the values within the results
+
+##### options
+
+*  `useStartTime` boolean
+Use the start time as the timestamp of the resulting aggregate.
 
 Example:
 ```
@@ -257,7 +284,13 @@ from(db:"foo")
 ```
 
 #### min
+
 Returns the min value within the results
+
+##### options
+
+*  `useStartTime` boolean
+Use the start time as the timestamp of the resulting aggregate.
 
 Example:
 ```
@@ -291,6 +324,20 @@ Defaults to "now"
 
 #### sample
 
+Sample values from a table.
+
+##### options
+
+*  `useStartTime` boolean
+Use the start time as the timestamp of the resulting aggregate.
+* `n`
+Sample every Nth element
+* `pos`
+Position offset from start of results to begin sampling
+`pos` must be less than `n`
+If `pos` less than 0, a random offset is used.
+Default is -1 (random offset)
+
 Example to sample every fifth point starting from the second element:
 ```
 from(db:"foo")
@@ -300,15 +347,6 @@ from(db:"foo")
     |> sample(n: 5, pos: 1)
 ```
 
-##### options
-* `n`
-Sample every Nth element
-* `pos`
-Position offset from start of results to begin sampling
-`pos` must be less than `n`
-If `pos` less than 0, a random offset is used.
-Default is -1 (random offset)
-
 #### set
 Add tag of key and value to set
 Example: `from(db: "telegraf") |> set(key: "mykey", value: "myvalue")`
@@ -317,7 +355,13 @@ Example: `from(db: "telegraf") |> set(key: "mykey", value: "myvalue")`
 * `value` string
 
 #### skew
+
 Skew of the results
+
+##### options
+
+*  `useStartTime` boolean
+Use the start time as the timestamp of the resulting aggregate.
 
 Example: `from(db: "telegraf") |> range(start: -30m, stop: -15m) |> skew()`
 
@@ -354,17 +398,35 @@ from(db:"telegraf")
 Sort results descending
 
 #### spread
+
 Difference between min and max values
+
+##### options
+
+*  `useStartTime` boolean
+Use the start time as the timestamp of the resulting aggregate.
 
 Example: `from(db: "telegraf") |> range(start: -30m) |> spread()`
 
 #### stddev
+
 Standard Deviation of the results
+
+##### options
+
+*  `useStartTime` boolean
+Use the start time as the timestamp of the resulting aggregate.
 
 Example: `from(db: "telegraf") |> range(start: -30m, stop: -15m) |> stddev()`
 
 #### sum
+
 Sum of the results
+
+##### options
+
+*  `useStartTime` boolean
+Use the start time as the timestamp of the resulting aggregate.
 
 Example: `from(db: "telegraf") |> range(start: -30m, stop: -15m) |> sum()`
 

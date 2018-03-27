@@ -1,25 +1,43 @@
 package execute
 
+import "github.com/influxdata/ifql/query"
+
 type aggregateTransformation struct {
 	d      Dataset
 	cache  BlockBuilderCache
 	bounds Bounds
 	agg    Aggregate
+
+	config AggregateConfig
 }
 
-func NewAggregateTransformation(d Dataset, c BlockBuilderCache, bounds Bounds, agg Aggregate) *aggregateTransformation {
+type AggregateConfig struct {
+	UseStartTime bool `json:"useStartTime"`
+}
+
+func (c *AggregateConfig) ReadArgs(args query.Arguments) error {
+	if useStartTime, ok, err := args.GetBool("useStartTime"); err != nil {
+		return err
+	} else if ok {
+		c.UseStartTime = useStartTime
+	}
+	return nil
+}
+
+func NewAggregateTransformation(d Dataset, c BlockBuilderCache, bounds Bounds, agg Aggregate, config AggregateConfig) *aggregateTransformation {
 	return &aggregateTransformation{
 		d:      d,
 		cache:  c,
 		bounds: bounds,
 		agg:    agg,
+		config: config,
 	}
 }
 
-func NewAggregateTransformationAndDataset(id DatasetID, mode AccumulationMode, bounds Bounds, agg Aggregate, a *Allocator) (*aggregateTransformation, Dataset) {
+func NewAggregateTransformationAndDataset(id DatasetID, mode AccumulationMode, bounds Bounds, agg Aggregate, config AggregateConfig, a *Allocator) (*aggregateTransformation, Dataset) {
 	cache := NewBlockBuilderCache(a)
 	d := NewDataset(id, mode, cache)
-	return NewAggregateTransformation(d, cache, bounds, agg), d
+	return NewAggregateTransformation(d, cache, bounds, agg, config), d
 }
 
 func (t *aggregateTransformation) RetractBlock(id DatasetID, meta BlockMetadata) error {
@@ -68,7 +86,11 @@ func (t *aggregateTransformation) Process(id DatasetID, b Block) error {
 	}
 	// Add row for aggregate values
 	timeIdx := TimeIdx(builder.Cols())
-	builder.AppendTime(timeIdx, b.Bounds().Stop)
+	if t.config.UseStartTime {
+		builder.AppendTime(timeIdx, b.Bounds().Start)
+	} else {
+		builder.AppendTime(timeIdx, b.Bounds().Stop)
+	}
 
 	for j, c := range b.Cols() {
 		if c.Kind != ValueColKind {

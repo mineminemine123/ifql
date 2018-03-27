@@ -20,6 +20,7 @@ type PercentileOpSpec struct {
 	Percentile  float64 `json:"percentile"`
 	Compression float64 `json:"compression"`
 	Exact       bool    `json:"exact"`
+	execute.AggregateConfig
 }
 
 var percentileSignature = query.DefaultFunctionSignature()
@@ -80,6 +81,10 @@ func createPercentileOpSpec(args query.Arguments, a *query.Administration) (quer
 		spec.Compression = 1000
 	}
 
+	if err := spec.AggregateConfig.ReadArgs(args); err != nil {
+		return nil, err
+	}
+
 	return spec, nil
 }
 
@@ -94,6 +99,7 @@ func (s *PercentileOpSpec) Kind() query.OperationKind {
 type PercentileProcedureSpec struct {
 	Percentile  float64 `json:"percentile"`
 	Compression float64 `json:"compression"`
+	execute.AggregateConfig
 }
 
 func (s *PercentileProcedureSpec) Kind() plan.ProcedureKind {
@@ -101,13 +107,15 @@ func (s *PercentileProcedureSpec) Kind() plan.ProcedureKind {
 }
 func (s *PercentileProcedureSpec) Copy() plan.ProcedureSpec {
 	return &PercentileProcedureSpec{
-		Percentile:  s.Percentile,
-		Compression: s.Compression,
+		Percentile:      s.Percentile,
+		Compression:     s.Compression,
+		AggregateConfig: s.AggregateConfig,
 	}
 }
 
 type ExactPercentileProcedureSpec struct {
 	Percentile float64 `json:"percentile"`
+	execute.AggregateConfig
 }
 
 func (s *ExactPercentileProcedureSpec) Kind() plan.ProcedureKind {
@@ -124,12 +132,14 @@ func newPercentileProcedure(qs query.OperationSpec, a plan.Administration) (plan
 	}
 	if spec.Exact {
 		return &ExactPercentileProcedureSpec{
-			Percentile: spec.Percentile,
+			Percentile:      spec.Percentile,
+			AggregateConfig: spec.AggregateConfig,
 		}, nil
 	}
 	return &PercentileProcedureSpec{
-		Percentile:  spec.Percentile,
-		Compression: spec.Compression,
+		Percentile:      spec.Percentile,
+		Compression:     spec.Compression,
+		AggregateConfig: spec.AggregateConfig,
 	}, nil
 }
 
@@ -149,7 +159,7 @@ func createPercentileTransformation(id execute.DatasetID, mode execute.Accumulat
 		Quantile:    ps.Percentile,
 		Compression: ps.Compression,
 	}
-	t, d := execute.NewAggregateTransformationAndDataset(id, mode, a.Bounds(), agg, a.Allocator())
+	t, d := execute.NewAggregateTransformationAndDataset(id, mode, a.Bounds(), agg, ps.AggregateConfig, a.Allocator())
 	return t, d, nil
 }
 
@@ -204,7 +214,7 @@ func createExactPercentileTransformation(id execute.DatasetID, mode execute.Accu
 	agg := &ExactPercentileAgg{
 		Quantile: ps.Percentile,
 	}
-	t, d := execute.NewAggregateTransformationAndDataset(id, mode, a.Bounds(), agg, a.Allocator())
+	t, d := execute.NewAggregateTransformationAndDataset(id, mode, a.Bounds(), agg, ps.AggregateConfig, a.Allocator())
 	return t, d, nil
 }
 

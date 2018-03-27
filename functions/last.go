@@ -12,8 +12,7 @@ import (
 const LastKind = "last"
 
 type LastOpSpec struct {
-	Column     string `json:"column"`
-	UseRowTime bool   `json:"useRowtime"`
+	execute.SelectorConfig
 }
 
 var lastSignature = query.DefaultFunctionSignature()
@@ -34,15 +33,8 @@ func createLastOpSpec(args query.Arguments, a *query.Administration) (query.Oper
 	}
 
 	spec := new(LastOpSpec)
-	if c, ok, err := args.GetString("column"); err != nil {
+	if err := spec.SelectorConfig.ReadArgs(args); err != nil {
 		return nil, err
-	} else if ok {
-		spec.Column = c
-	}
-	if useRowTime, ok, err := args.GetBool("useRowTime"); err != nil {
-		return nil, err
-	} else if ok {
-		spec.UseRowTime = useRowTime
 	}
 	return spec, nil
 }
@@ -56,8 +48,7 @@ func (s *LastOpSpec) Kind() query.OperationKind {
 }
 
 type LastProcedureSpec struct {
-	Column     string
-	UseRowTime bool
+	execute.SelectorConfig
 }
 
 func newLastProcedure(qs query.OperationSpec, pa plan.Administration) (plan.ProcedureSpec, error) {
@@ -66,8 +57,7 @@ func newLastProcedure(qs query.OperationSpec, pa plan.Administration) (plan.Proc
 		return nil, fmt.Errorf("invalid spec type %T", qs)
 	}
 	return &LastProcedureSpec{
-		Column:     spec.Column,
-		UseRowTime: spec.UseRowTime,
+		SelectorConfig: spec.SelectorConfig,
 	}, nil
 }
 
@@ -114,8 +104,7 @@ func (s *LastProcedureSpec) PushDown(root *plan.Procedure, dup func() *plan.Proc
 
 func (s *LastProcedureSpec) Copy() plan.ProcedureSpec {
 	ns := new(LastProcedureSpec)
-	ns.Column = s.Column
-	ns.UseRowTime = s.UseRowTime
+	ns.SelectorConfig = s.SelectorConfig
 	return ns
 }
 
@@ -128,7 +117,7 @@ func createLastTransformation(id execute.DatasetID, mode execute.AccumulationMod
 	if !ok {
 		return nil, nil, fmt.Errorf("invalid spec type %T", ps)
 	}
-	t, d := execute.NewRowSelectorTransformationAndDataset(id, mode, a.Bounds(), new(LastSelector), ps.Column, ps.UseRowTime, a.Allocator())
+	t, d := execute.NewRowSelectorTransformationAndDataset(id, mode, a.Bounds(), new(LastSelector), ps.SelectorConfig, a.Allocator())
 	return t, d, nil
 }
 

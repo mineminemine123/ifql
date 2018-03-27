@@ -1,6 +1,8 @@
 package functions
 
 import (
+	"fmt"
+
 	"github.com/influxdata/ifql/query"
 	"github.com/influxdata/ifql/query/execute"
 	"github.com/influxdata/ifql/query/plan"
@@ -9,6 +11,7 @@ import (
 const CountKind = "count"
 
 type CountOpSpec struct {
+	execute.AggregateConfig
 }
 
 var countSignature = query.DefaultFunctionSignature()
@@ -24,7 +27,11 @@ func createCountOpSpec(args query.Arguments, a *query.Administration) (query.Ope
 	if err := a.AddParentFromArgs(args); err != nil {
 		return nil, err
 	}
-	return new(CountOpSpec), nil
+	s := new(CountOpSpec)
+	if err := s.AggregateConfig.ReadArgs(args); err != nil {
+		return s, err
+	}
+	return s, nil
 }
 
 func newCountOp() query.OperationSpec {
@@ -36,10 +43,17 @@ func (s *CountOpSpec) Kind() query.OperationKind {
 }
 
 type CountProcedureSpec struct {
+	execute.AggregateConfig
 }
 
-func newCountProcedure(query.OperationSpec, plan.Administration) (plan.ProcedureSpec, error) {
-	return new(CountProcedureSpec), nil
+func newCountProcedure(qs query.OperationSpec, a plan.Administration) (plan.ProcedureSpec, error) {
+	spec, ok := qs.(*CountOpSpec)
+	if !ok {
+		return nil, fmt.Errorf("invalid spec type %T", qs)
+	}
+	return &CountProcedureSpec{
+		AggregateConfig: spec.AggregateConfig,
+	}, nil
 }
 
 func (s *CountProcedureSpec) Kind() plan.ProcedureKind {
@@ -47,7 +61,9 @@ func (s *CountProcedureSpec) Kind() plan.ProcedureKind {
 }
 
 func (s *CountProcedureSpec) Copy() plan.ProcedureSpec {
-	return new(CountProcedureSpec)
+	return &CountProcedureSpec{
+		AggregateConfig: s.AggregateConfig,
+	}
 }
 
 func (s *CountProcedureSpec) AggregateMethod() string {
@@ -86,7 +102,12 @@ type CountAgg struct {
 }
 
 func createCountTransformation(id execute.DatasetID, mode execute.AccumulationMode, spec plan.ProcedureSpec, a execute.Administration) (execute.Transformation, execute.Dataset, error) {
-	t, d := execute.NewAggregateTransformationAndDataset(id, mode, a.Bounds(), new(CountAgg), a.Allocator())
+	s, ok := spec.(*CountProcedureSpec)
+	if !ok {
+		return nil, nil, fmt.Errorf("invalid spec type %T", spec)
+	}
+
+	t, d := execute.NewAggregateTransformationAndDataset(id, mode, a.Bounds(), new(CountAgg), s.AggregateConfig, a.Allocator())
 	return t, d, nil
 }
 

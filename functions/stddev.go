@@ -1,6 +1,7 @@
 package functions
 
 import (
+	"fmt"
 	"math"
 
 	"github.com/influxdata/ifql/query"
@@ -11,6 +12,7 @@ import (
 const StddevKind = "stddev"
 
 type StddevOpSpec struct {
+	execute.AggregateConfig
 }
 
 var stddevSignature = query.DefaultFunctionSignature()
@@ -25,8 +27,11 @@ func createStddevOpSpec(args query.Arguments, a *query.Administration) (query.Op
 	if err := a.AddParentFromArgs(args); err != nil {
 		return nil, err
 	}
-
-	return new(StddevOpSpec), nil
+	s := new(StddevOpSpec)
+	if err := s.AggregateConfig.ReadArgs(args); err != nil {
+		return s, err
+	}
+	return s, nil
 }
 
 func newStddevOp() query.OperationSpec {
@@ -38,17 +43,26 @@ func (s *StddevOpSpec) Kind() query.OperationKind {
 }
 
 type StddevProcedureSpec struct {
+	execute.AggregateConfig
 }
 
-func newStddevProcedure(query.OperationSpec, plan.Administration) (plan.ProcedureSpec, error) {
-	return new(StddevProcedureSpec), nil
+func newStddevProcedure(qs query.OperationSpec, a plan.Administration) (plan.ProcedureSpec, error) {
+	spec, ok := qs.(*StddevOpSpec)
+	if !ok {
+		return nil, fmt.Errorf("invalid spec type %T", qs)
+	}
+	return &StddevProcedureSpec{
+		AggregateConfig: spec.AggregateConfig,
+	}, nil
 }
 
 func (s *StddevProcedureSpec) Kind() plan.ProcedureKind {
 	return StddevKind
 }
 func (s *StddevProcedureSpec) Copy() plan.ProcedureSpec {
-	return new(StddevProcedureSpec)
+	return &StddevProcedureSpec{
+		AggregateConfig: s.AggregateConfig,
+	}
 }
 
 type StddevAgg struct {
@@ -56,7 +70,11 @@ type StddevAgg struct {
 }
 
 func createStddevTransformation(id execute.DatasetID, mode execute.AccumulationMode, spec plan.ProcedureSpec, a execute.Administration) (execute.Transformation, execute.Dataset, error) {
-	t, d := execute.NewAggregateTransformationAndDataset(id, mode, a.Bounds(), new(StddevAgg), a.Allocator())
+	s, ok := spec.(*StddevProcedureSpec)
+	if !ok {
+		return nil, nil, fmt.Errorf("invalid spec type %T", spec)
+	}
+	t, d := execute.NewAggregateTransformationAndDataset(id, mode, a.Bounds(), new(StddevAgg), s.AggregateConfig, a.Allocator())
 	return t, d, nil
 }
 

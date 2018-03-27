@@ -15,7 +15,9 @@ func TestMaxOperation_Marshaling(t *testing.T) {
 	op := &query.Operation{
 		ID: "max",
 		Spec: &functions.MaxOpSpec{
-			UseRowTime: true,
+			SelectorConfig: execute.SelectorConfig{
+				UseRowTime: true,
+			},
 		},
 	}
 

@@ -17,7 +17,9 @@ func TestLastOperation_Marshaling(t *testing.T) {
 	op := &query.Operation{
 		ID: "last",
 		Spec: &functions.LastOpSpec{
-			UseRowTime: true,
+			SelectorConfig: execute.SelectorConfig{
+				UseRowTime: true,
+			},
 		},
 	}
 

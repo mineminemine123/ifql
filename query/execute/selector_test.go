@@ -14,12 +14,11 @@ import (
 func TestRowSelector_Process(t *testing.T) {
 	// All test cases use a simple MinSelector
 	testCases := []struct {
-		name       string
-		bounds     execute.Bounds
-		colLabel   string
-		useRowTime bool
-		data       []*executetest.Block
-		want       func(b execute.Bounds) []*executetest.Block
+		name           string
+		bounds         execute.Bounds
+		selectorConfig execute.SelectorConfig
+		data           []*executetest.Block
+		want           func(b execute.Bounds) []*executetest.Block
 	}{
 		{
 			name: "single",
@@ -63,8 +62,10 @@ func TestRowSelector_Process(t *testing.T) {
 			},
 		},
 		{
-			name:       "single useRowTime",
-			useRowTime: true,
+			name: "single useStartTime",
+			selectorConfig: execute.SelectorConfig{
+				UseStartTime: true,
+			},
 			bounds: execute.Bounds{
 				Start: 0,
 				Stop:  100,
@@ -105,8 +106,54 @@ func TestRowSelector_Process(t *testing.T) {
 			},
 		},
 		{
-			name:     "single custom column",
-			colLabel: "x",
+			name: "single useRowTime",
+			selectorConfig: execute.SelectorConfig{
+				UseRowTime: true,
+			},
+			bounds: execute.Bounds{
+				Start: 0,
+				Stop:  100,
+			},
+			data: []*executetest.Block{{
+				Bnds: execute.Bounds{
+					Start: 0,
+					Stop:  100,
+				},
+				ColMeta: []execute.ColMeta{
+					{Label: "_time", Type: execute.TTime, Kind: execute.TimeColKind},
+					{Label: "_value", Type: execute.TFloat, Kind: execute.ValueColKind},
+				},
+				Data: [][]interface{}{
+					{execute.Time(0), 0.0},
+					{execute.Time(10), 1.0},
+					{execute.Time(20), 2.0},
+					{execute.Time(30), 3.0},
+					{execute.Time(40), 4.0},
+					{execute.Time(50), 5.0},
+					{execute.Time(60), 6.0},
+					{execute.Time(70), 7.0},
+					{execute.Time(80), 8.0},
+					{execute.Time(90), 9.0},
+				},
+			}},
+			want: func(b execute.Bounds) []*executetest.Block {
+				return []*executetest.Block{{
+					Bnds: b,
+					ColMeta: []execute.ColMeta{
+						{Label: "_time", Type: execute.TTime, Kind: execute.TimeColKind},
+						{Label: "_value", Type: execute.TFloat, Kind: execute.ValueColKind},
+					},
+					Data: [][]interface{}{
+						{execute.Time(0), 0.0},
+					},
+				}}
+			},
+		},
+		{
+			name: "single custom column",
+			selectorConfig: execute.SelectorConfig{
+				Column: "x",
+			},
 			bounds: execute.Bounds{
 				Start: 0,
 				Stop:  100,
@@ -213,8 +260,10 @@ func TestRowSelector_Process(t *testing.T) {
 			},
 		},
 		{
-			name:       "multiple blocks with tags and useRowTime",
-			useRowTime: true,
+			name: "multiple blocks with tags and useRowTime",
+			selectorConfig: execute.SelectorConfig{
+				UseRowTime: true,
+			},
 			bounds: execute.Bounds{
 				Start: 0,
 				Stop:  200,
@@ -356,7 +405,7 @@ func TestRowSelector_Process(t *testing.T) {
 			c := execute.NewBlockBuilderCache(executetest.UnlimitedAllocator)
 			c.SetTriggerSpec(execute.DefaultTriggerSpec)
 
-			selector := execute.NewRowSelectorTransformation(d, c, tc.bounds, new(functions.MinSelector), tc.colLabel, tc.useRowTime)
+			selector := execute.NewRowSelectorTransformation(d, c, tc.bounds, new(functions.MinSelector), tc.selectorConfig)
 
 			parentID := executetest.RandomDatasetID()
 			for _, b := range tc.data {
@@ -381,11 +430,11 @@ func TestRowSelector_Process(t *testing.T) {
 func TestIndexSelector_Process(t *testing.T) {
 	// All test cases use a simple FirstSelector
 	testCases := []struct {
-		name       string
-		bounds     execute.Bounds
-		useRowTime bool
-		data       []*executetest.Block
-		want       func(b execute.Bounds) []*executetest.Block
+		name           string
+		bounds         execute.Bounds
+		selectorConfig execute.SelectorConfig
+		data           []*executetest.Block
+		want           func(b execute.Bounds) []*executetest.Block
 	}{
 		{
 			name: "single",
@@ -429,8 +478,54 @@ func TestIndexSelector_Process(t *testing.T) {
 			},
 		},
 		{
-			name:       "single useRowTime",
-			useRowTime: true,
+			name: "single useStartTime",
+			selectorConfig: execute.SelectorConfig{
+				UseStartTime: true,
+			},
+			bounds: execute.Bounds{
+				Start: 0,
+				Stop:  100,
+			},
+			data: []*executetest.Block{{
+				Bnds: execute.Bounds{
+					Start: 0,
+					Stop:  100,
+				},
+				ColMeta: []execute.ColMeta{
+					{Label: "_time", Type: execute.TTime, Kind: execute.TimeColKind},
+					{Label: "_value", Type: execute.TFloat, Kind: execute.ValueColKind},
+				},
+				Data: [][]interface{}{
+					{execute.Time(1), 0.0},
+					{execute.Time(10), 1.0},
+					{execute.Time(20), 2.0},
+					{execute.Time(30), 3.0},
+					{execute.Time(40), 4.0},
+					{execute.Time(50), 5.0},
+					{execute.Time(60), 6.0},
+					{execute.Time(70), 7.0},
+					{execute.Time(80), 8.0},
+					{execute.Time(90), 9.0},
+				},
+			}},
+			want: func(b execute.Bounds) []*executetest.Block {
+				return []*executetest.Block{{
+					Bnds: b,
+					ColMeta: []execute.ColMeta{
+						{Label: "_time", Type: execute.TTime, Kind: execute.TimeColKind},
+						{Label: "_value", Type: execute.TFloat, Kind: execute.ValueColKind},
+					},
+					Data: [][]interface{}{
+						{execute.Time(0), 0.0},
+					},
+				}}
+			},
+		},
+		{
+			name: "single useRowTime",
+			selectorConfig: execute.SelectorConfig{
+				UseRowTime: true,
+			},
 			bounds: execute.Bounds{
 				Start: 0,
 				Stop:  100,
@@ -537,8 +632,10 @@ func TestIndexSelector_Process(t *testing.T) {
 			},
 		},
 		{
-			name:       "multiple blocks with tags and useRowTime",
-			useRowTime: true,
+			name: "multiple blocks with tags and useRowTime",
+			selectorConfig: execute.SelectorConfig{
+				UseRowTime: true,
+			},
 			bounds: execute.Bounds{
 				Start: 0,
 				Stop:  200,
@@ -680,7 +777,7 @@ func TestIndexSelector_Process(t *testing.T) {
 			c := execute.NewBlockBuilderCache(executetest.UnlimitedAllocator)
 			c.SetTriggerSpec(execute.DefaultTriggerSpec)
 
-			selector := execute.NewIndexSelectorTransformation(d, c, tc.bounds, new(functions.FirstSelector), "_value", tc.useRowTime)
+			selector := execute.NewIndexSelectorTransformation(d, c, tc.bounds, new(functions.FirstSelector), tc.selectorConfig)
 
 			parentID := executetest.RandomDatasetID()
 			for _, b := range tc.data {

@@ -1,6 +1,8 @@
 package functions
 
 import (
+	"fmt"
+
 	"github.com/influxdata/ifql/query"
 	"github.com/influxdata/ifql/query/execute"
 	"github.com/influxdata/ifql/query/plan"
@@ -9,6 +11,7 @@ import (
 const SumKind = "sum"
 
 type SumOpSpec struct {
+	execute.AggregateConfig
 }
 
 var sumSignature = query.DefaultFunctionSignature()
@@ -24,8 +27,11 @@ func createSumOpSpec(args query.Arguments, a *query.Administration) (query.Opera
 	if err := a.AddParentFromArgs(args); err != nil {
 		return nil, err
 	}
-
-	return new(SumOpSpec), nil
+	s := new(SumOpSpec)
+	if err := s.AggregateConfig.ReadArgs(args); err != nil {
+		return s, err
+	}
+	return s, nil
 }
 
 func newSumOp() query.OperationSpec {
@@ -37,10 +43,17 @@ func (s *SumOpSpec) Kind() query.OperationKind {
 }
 
 type SumProcedureSpec struct {
+	execute.AggregateConfig
 }
 
-func newSumProcedure(query.OperationSpec, plan.Administration) (plan.ProcedureSpec, error) {
-	return new(SumProcedureSpec), nil
+func newSumProcedure(qs query.OperationSpec, a plan.Administration) (plan.ProcedureSpec, error) {
+	spec, ok := qs.(*SumOpSpec)
+	if !ok {
+		return nil, fmt.Errorf("invalid spec type %T", qs)
+	}
+	return &SumProcedureSpec{
+		AggregateConfig: spec.AggregateConfig,
+	}, nil
 }
 
 func (s *SumProcedureSpec) Kind() plan.ProcedureKind {
@@ -48,7 +61,9 @@ func (s *SumProcedureSpec) Kind() plan.ProcedureKind {
 }
 
 func (s *SumProcedureSpec) Copy() plan.ProcedureSpec {
-	return new(SumProcedureSpec)
+	return &SumProcedureSpec{
+		AggregateConfig: s.AggregateConfig,
+	}
 }
 
 func (s *SumProcedureSpec) AggregateMethod() string {
@@ -84,9 +99,15 @@ func (s *SumProcedureSpec) PushDown(root *plan.Procedure, dup func() *plan.Proce
 type SumAgg struct{}
 
 func createSumTransformation(id execute.DatasetID, mode execute.AccumulationMode, spec plan.ProcedureSpec, a execute.Administration) (execute.Transformation, execute.Dataset, error) {
-	t, d := execute.NewAggregateTransformationAndDataset(id, mode, a.Bounds(), new(SumAgg), a.Allocator())
+	s, ok := spec.(*SumProcedureSpec)
+	if !ok {
+		return nil, nil, fmt.Errorf("invalid spec type %T", spec)
+	}
+
+	t, d := execute.NewAggregateTransformationAndDataset(id, mode, a.Bounds(), new(SumAgg), s.AggregateConfig, a.Allocator())
 	return t, d, nil
 }
+
 func (a *SumAgg) NewBoolAgg() execute.DoBoolAgg {
 	return nil
 }

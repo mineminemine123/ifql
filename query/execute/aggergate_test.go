@@ -18,6 +18,7 @@ func TestAggregate_Process(t *testing.T) {
 		name   string
 		bounds execute.Bounds
 		agg    execute.Aggregate
+		config execute.AggregateConfig
 		data   []*executetest.Block
 		want   func(b execute.Bounds) []*executetest.Block
 	}{
@@ -59,6 +60,51 @@ func TestAggregate_Process(t *testing.T) {
 					},
 					Data: [][]interface{}{
 						{execute.Time(100), 45.0},
+					},
+				}}
+			},
+		},
+		{
+			name: "single use start time",
+			config: execute.AggregateConfig{
+				UseStartTime: true,
+			},
+			bounds: execute.Bounds{
+				Start: 0,
+				Stop:  100,
+			},
+			agg: sumAgg,
+			data: []*executetest.Block{{
+				Bnds: execute.Bounds{
+					Start: 0,
+					Stop:  100,
+				},
+				ColMeta: []execute.ColMeta{
+					{Label: "_time", Type: execute.TTime, Kind: execute.TimeColKind},
+					{Label: "_value", Type: execute.TFloat, Kind: execute.ValueColKind},
+				},
+				Data: [][]interface{}{
+					{execute.Time(0), 0.0},
+					{execute.Time(10), 1.0},
+					{execute.Time(20), 2.0},
+					{execute.Time(30), 3.0},
+					{execute.Time(40), 4.0},
+					{execute.Time(50), 5.0},
+					{execute.Time(60), 6.0},
+					{execute.Time(70), 7.0},
+					{execute.Time(80), 8.0},
+					{execute.Time(90), 9.0},
+				},
+			}},
+			want: func(b execute.Bounds) []*executetest.Block {
+				return []*executetest.Block{{
+					Bnds: b,
+					ColMeta: []execute.ColMeta{
+						{Label: "_time", Type: execute.TTime, Kind: execute.TimeColKind},
+						{Label: "_value", Type: execute.TFloat, Kind: execute.ValueColKind},
+					},
+					Data: [][]interface{}{
+						{execute.Time(0), 45.0},
 					},
 				}}
 			},
@@ -356,7 +402,7 @@ func TestAggregate_Process(t *testing.T) {
 			c := execute.NewBlockBuilderCache(executetest.UnlimitedAllocator)
 			c.SetTriggerSpec(execute.DefaultTriggerSpec)
 
-			agg := execute.NewAggregateTransformation(d, c, tc.bounds, tc.agg)
+			agg := execute.NewAggregateTransformation(d, c, tc.bounds, tc.agg, tc.config)
 
 			parentID := executetest.RandomDatasetID()
 			for _, b := range tc.data {

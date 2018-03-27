@@ -15,7 +15,9 @@ func TestMinOperation_Marshaling(t *testing.T) {
 	op := &query.Operation{
 		ID: "min",
 		Spec: &functions.MinOpSpec{
-			UseRowTime: true,
+			SelectorConfig: execute.SelectorConfig{
+				UseRowTime: true,
+			},
 		},
 	}
 
