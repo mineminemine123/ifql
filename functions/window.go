@@ -132,11 +132,17 @@ func createWindowTransformation(id execute.DatasetID, mode execute.AccumulationM
 	}
 	cache := execute.NewBlockBuilderCache(a.Allocator())
 	d := execute.NewDataset(id, mode, cache)
+	var start execute.Time
+	if s.Window.Start.IsZero() {
+		start = a.ResolveTime(query.Now).Truncate(execute.Duration(s.Window.Every))
+	} else {
+		start = a.ResolveTime(s.Window.Start)
+	}
 	t := NewFixedWindowTransformation(d, cache, a.Bounds(), execute.Window{
 		Every:  execute.Duration(s.Window.Every),
 		Period: execute.Duration(s.Window.Period),
 		Round:  execute.Duration(s.Window.Round),
-		Start:  a.ResolveTime(s.Window.Start),
+		Start:  start,
 	})
 	return t, d, nil
 }
