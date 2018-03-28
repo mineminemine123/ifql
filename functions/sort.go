@@ -3,6 +3,7 @@ package functions
 import (
 	"fmt"
 
+	"github.com/influxdata/ifql/interpreter"
 	"github.com/influxdata/ifql/query"
 	"github.com/influxdata/ifql/query/execute"
 	"github.com/influxdata/ifql/query/plan"
@@ -37,7 +38,10 @@ func createSortOpSpec(args query.Arguments, a *query.Administration) (query.Oper
 	if array, ok, err := args.GetArray("cols", semantic.String); err != nil {
 		return nil, err
 	} else if ok {
-		spec.Cols = array.AsStrings()
+		spec.Cols, err = interpreter.ToStringArray(array)
+		if err != nil {
+			return nil, err
+		}
 	} else {
 		//Default behavior to sort by value
 		spec.Cols = []string{execute.DefaultValueColLabel}

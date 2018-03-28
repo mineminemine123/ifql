@@ -8,10 +8,12 @@ import (
 	"sync"
 
 	"github.com/influxdata/ifql/compiler"
+	"github.com/influxdata/ifql/interpreter"
 	"github.com/influxdata/ifql/query"
 	"github.com/influxdata/ifql/query/execute"
 	"github.com/influxdata/ifql/query/plan"
 	"github.com/influxdata/ifql/semantic"
+	"github.com/influxdata/ifql/values"
 	"github.com/pkg/errors"
 )
 
@@ -42,7 +44,7 @@ var joinSignature = semantic.FunctionSignature{
 }
 
 func init() {
-	query.RegisterFunction(JoinKind, createJoinOpSpec, semantic.FunctionSignature{})
+	query.RegisterFunction(JoinKind, createJoinOpSpec, joinSignature)
 	query.RegisterOpSpec(JoinKind, newJoinOp)
 	//TODO(nathanielc): Allow for other types of join implementations
 	plan.RegisterProcedureSpec(MergeJoinKind, newMergeJoinProcedure, JoinKind)
@@ -54,34 +56,46 @@ func createJoinOpSpec(args query.Arguments, a *query.Administration) (query.Oper
 	if err != nil {
 		return nil, err
 	}
-	resolved, err := f.Resolve()
+	fn, err := interpreter.ResolveFunction(f)
 	if err != nil {
 		return nil, err
 	}
 	spec := &JoinOpSpec{
-		Fn:         resolved,
+		Fn:         fn,
 		TableNames: make(map[query.OperationID]string),
 	}
 
 	if array, ok, err := args.GetArray("on", semantic.String); err != nil {
 		return nil, err
 	} else if ok {
-		spec.On = array.AsStrings()
+		spec.On, err = interpreter.ToStringArray(array)
+		if err != nil {
+			return nil, err
+		}
 	}
 
 	if m, ok, err := args.GetObject("tables"); err != nil {
 		return nil, err
 	} else if ok {
-		for k, t := range m.Properties {
+		var err error
+		m.Range(func(k string, t values.Value) {
+			if err != nil {
+				return
+			}
 			if t.Type().Kind() != semantic.Object {
-				return nil, fmt.Errorf("value for key %q in tables must be an object: got %v", k, t.Type().Kind())
+				err = fmt.Errorf("value for key %q in tables must be an object: got %v", k, t.Type().Kind())
+				return
 			}
 			if t.Type() != query.TableObjectType {
-				return nil, fmt.Errorf("value for key %q in tables must be an table object: got %v", k, t.Type())
+				err = fmt.Errorf("value for key %q in tables must be an table object: got %v", k, t.Type())
+				return
 			}
 			p := t.(query.TableObject)
 			a.AddParent(p)
-			spec.TableNames[p.ID()] = k
+			spec.TableNames[p.ID] = k
+		})
+		if err != nil {
+			return nil, err
 		}
 	}
 
@@ -544,7 +558,7 @@ func (t *joinTables) Join() (execute.Block, error) {
 
 							builder.AppendString(j, leftKey.Tags[c.Label])
 						case execute.ValueColKind:
-							v := m.Get(c.Label)
+							v, _ := m.Get(c.Label)
 							execute.AppendValue(builder, j, v)
 						default:
 							log.Printf("unexpected column %v", c)
@@ -650,13 +664,13 @@ type joinFunc struct {
 	preparedFn compiler.Func
 
 	recordName string
-	record     *compiler.Object
+	record     *execute.Record
 
 	recordCols map[tableCol]int
 	references map[string][]string
 
 	isWrap  bool
-	wrapObj *compiler.Object
+	wrapObj *execute.Record
 
 	tableData map[string]*execute.ColListBlock
 }
@@ -669,14 +683,13 @@ func NewRowJoinFunction(fn *semantic.FunctionExpression, parentIDs []execute.Dat
 	if len(fn.Params) != 1 {
 		return nil, errors.New("join function should only have one parameter for the map of tables")
 	}
+	scope, decls := query.BuiltIns()
 	return &joinFunc{
-		compilationCache: compiler.NewCompilationCache(fn),
+		compilationCache: compiler.NewCompilationCache(fn, scope, decls),
 		scope:            make(compiler.Scope, 1),
 		references:       findTableReferences(fn),
 		recordCols:       make(map[tableCol]int),
-		record:           compiler.NewObject(),
 		recordName:       fn.Params[0].Key.Name,
-		wrapObj:          compiler.NewObject(),
 	}, nil
 }
 
@@ -686,7 +699,6 @@ func (f *joinFunc) Prepare(tables map[string]*execute.ColListBlock) error {
 	// Prepare types and recordcols
 	for tbl, b := range tables {
 		cols := b.Cols()
-		f.record.Set(tbl, compiler.NewObject())
 		tblPropertyTypes := make(map[string]semantic.Type, len(f.references[tbl]))
 		for _, r := range f.references[tbl] {
 			found := false
@@ -704,9 +716,13 @@ func (f *joinFunc) Prepare(tables map[string]*execute.ColListBlock) error {
 		}
 		propertyTypes[tbl] = semantic.NewObjectType(tblPropertyTypes)
 	}
+	f.record = execute.NewRecord(semantic.NewObjectType(propertyTypes))
+	for tbl := range tables {
+		f.record.Set(tbl, execute.NewRecord(propertyTypes[tbl]))
+	}
 	// Compile fn for given types
 	fn, err := f.compilationCache.Compile(map[string]semantic.Type{
-		f.recordName: semantic.NewObjectType(propertyTypes),
+		f.recordName: f.record.Type(),
 	})
 	if err != nil {
 		return err
@@ -716,7 +732,9 @@ func (f *joinFunc) Prepare(tables map[string]*execute.ColListBlock) error {
 	k := f.preparedFn.Type().Kind()
 	f.isWrap = k != semantic.Object
 	if f.isWrap {
-		f.wrapObj.SetPropertyType(execute.DefaultValueColLabel, f.preparedFn.Type())
+		f.wrapObj = execute.NewRecord(semantic.NewObjectType(map[string]semantic.Type{
+			execute.DefaultValueColLabel: f.preparedFn.Type(),
+		}))
 	}
 	return nil
 }
@@ -728,15 +746,15 @@ func (f *joinFunc) Type() semantic.Type {
 	return f.preparedFn.Type()
 }
 
-func (f *joinFunc) Eval(rows map[string]int) (*compiler.Object, error) {
+func (f *joinFunc) Eval(rows map[string]int) (values.Object, error) {
 	for tbl, references := range f.references {
 		row := rows[tbl]
 		data := f.tableData[tbl]
-		obj := f.record.Get(tbl).(*compiler.Object)
+		obj, _ := f.record.Get(tbl)
+		o := obj.(*execute.Record)
 		for _, r := range references {
-			obj.Set(r, readValue(row, f.recordCols[tableCol{table: tbl, col: r}], data))
+			o.Set(r, readValue(row, f.recordCols[tableCol{table: tbl, col: r}], data))
 		}
-		f.record.Set(tbl, obj)
 	}
 	f.scope[f.recordName] = f.record
 
@@ -751,19 +769,19 @@ func (f *joinFunc) Eval(rows map[string]int) (*compiler.Object, error) {
 	return v.Object(), nil
 }
 
-func readValue(i, j int, table *execute.ColListBlock) compiler.Value {
+func readValue(i, j int, table *execute.ColListBlock) values.Value {
 	cols := table.Cols()
 	switch t := cols[j].Type; t {
 	case execute.TBool:
-		return compiler.NewBool(table.AtBool(i, j))
+		return values.NewBoolValue(table.AtBool(i, j))
 	case execute.TInt:
-		return compiler.NewInt(table.AtInt(i, j))
+		return values.NewIntValue(table.AtInt(i, j))
 	case execute.TUInt:
-		return compiler.NewUInt(table.AtUInt(i, j))
+		return values.NewUIntValue(table.AtUInt(i, j))
 	case execute.TFloat:
-		return compiler.NewFloat(table.AtFloat(i, j))
+		return values.NewFloatValue(table.AtFloat(i, j))
 	case execute.TString:
-		return compiler.NewString(table.AtString(i, j))
+		return values.NewStringValue(table.AtString(i, j))
 	default:
 		execute.PanicUnknownType(t)
 		return nil

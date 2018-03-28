@@ -5,6 +5,7 @@ import (
 	"log"
 	"time"
 
+	"github.com/influxdata/ifql/interpreter"
 	"github.com/influxdata/ifql/query"
 	"github.com/influxdata/ifql/query/execute"
 	"github.com/influxdata/ifql/query/plan"
@@ -78,13 +79,13 @@ func createStateTrackingOpSpec(args query.Arguments, a *query.Administration) (q
 		return nil, err
 	}
 
-	resolved, err := f.Resolve()
+	fn, err := interpreter.ResolveFunction(f)
 	if err != nil {
 		return nil, err
 	}
 
 	spec := &StateTrackingOpSpec{
-		Fn:           resolved,
+		Fn:           fn,
 		DurationUnit: query.Duration(time.Second),
 	}
 

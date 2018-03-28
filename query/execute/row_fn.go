@@ -2,9 +2,12 @@ package execute
 
 import (
 	"fmt"
+	"regexp"
 
 	"github.com/influxdata/ifql/compiler"
+	"github.com/influxdata/ifql/query"
 	"github.com/influxdata/ifql/semantic"
+	"github.com/influxdata/ifql/values"
 	"github.com/pkg/errors"
 )
 
@@ -16,7 +19,7 @@ type rowFn struct {
 	preparedFn compiler.Func
 
 	recordName string
-	record     *compiler.Object
+	record     *Record
 
 	recordCols map[string]int
 	references []string
@@ -26,13 +29,13 @@ func newRowFn(fn *semantic.FunctionExpression) (rowFn, error) {
 	if len(fn.Params) != 1 {
 		return rowFn{}, fmt.Errorf("function should only have a single parameter, got %d", len(fn.Params))
 	}
+	scope, decls := query.BuiltIns()
 	return rowFn{
-		compilationCache: compiler.NewCompilationCache(fn),
+		compilationCache: compiler.NewCompilationCache(fn, scope, decls),
 		scope:            make(compiler.Scope, 1),
 		recordName:       fn.Params[0].Key.Name,
 		references:       findColReferences(fn),
 		recordCols:       make(map[string]int),
-		record:           compiler.NewObject(),
 	}, nil
 }
 
@@ -53,9 +56,10 @@ func (f *rowFn) prepare(cols []ColMeta) error {
 			return fmt.Errorf("function references unknown column %q", r)
 		}
 	}
+	f.record = NewRecord(semantic.NewObjectType(propertyTypes))
 	// Compile fn for given types
 	fn, err := f.compilationCache.Compile(map[string]semantic.Type{
-		f.recordName: semantic.NewObjectType(propertyTypes),
+		f.recordName: f.record.Type(),
 	})
 	if err != nil {
 		return err
@@ -108,7 +112,7 @@ func ConvertFromKind(k semantic.Kind) DataType {
 	}
 }
 
-func (f *rowFn) eval(row int, rr RowReader) (compiler.Value, error) {
+func (f *rowFn) eval(row int, rr RowReader) (values.Value, error) {
 	for _, r := range f.references {
 		f.record.Set(r, ValueForRow(row, f.recordCols[r], rr))
 	}
@@ -153,7 +157,7 @@ type RowMapFn struct {
 	rowFn
 
 	isWrap  bool
-	wrapObj *compiler.Object
+	wrapObj *Record
 }
 
 func NewRowMapFn(fn *semantic.FunctionExpression) (*RowMapFn, error) {
@@ -162,8 +166,7 @@ func NewRowMapFn(fn *semantic.FunctionExpression) (*RowMapFn, error) {
 		return nil, err
 	}
 	return &RowMapFn{
-		rowFn:   r,
-		wrapObj: compiler.NewObject(),
+		rowFn: r,
 	}, nil
 }
 
@@ -175,7 +178,9 @@ func (f *RowMapFn) Prepare(cols []ColMeta) error {
 	k := f.preparedFn.Type().Kind()
 	f.isWrap = k != semantic.Object
 	if f.isWrap {
-		f.wrapObj.SetPropertyType(DefaultValueColLabel, f.preparedFn.Type())
+		f.wrapObj = NewRecord(semantic.NewObjectType(map[string]semantic.Type{
+			DefaultValueColLabel: f.preparedFn.Type(),
+		}))
 	}
 	return nil
 }
@@ -187,7 +192,7 @@ func (f *RowMapFn) Type() semantic.Type {
 	return f.preparedFn.Type()
 }
 
-func (f *RowMapFn) Eval(row int, rr RowReader) (*compiler.Object, error) {
+func (f *RowMapFn) Eval(row int, rr RowReader) (*Record, error) {
 	v, err := f.rowFn.eval(row, rr)
 	if err != nil {
 		return nil, err
@@ -196,31 +201,31 @@ func (f *RowMapFn) Eval(row int, rr RowReader) (*compiler.Object, error) {
 		f.wrapObj.Set(DefaultValueColLabel, v)
 		return f.wrapObj, nil
 	}
-	return v.Object(), nil
+	return v.Object().(*Record), nil
 }
 
-func ValueForRow(i, j int, rr RowReader) compiler.Value {
+func ValueForRow(i, j int, rr RowReader) values.Value {
 	t := rr.Cols()[j].Type
 	switch t {
-	case TBool:
-		return compiler.NewBool(rr.AtBool(i, j))
-	case TInt:
-		return compiler.NewInt(rr.AtInt(i, j))
-	case TUInt:
-		return compiler.NewUInt(rr.AtUInt(i, j))
-	case TFloat:
-		return compiler.NewFloat(rr.AtFloat(i, j))
 	case TString:
-		return compiler.NewString(rr.AtString(i, j))
+		return values.NewStringValue(rr.AtString(i, j))
+	case TInt:
+		return values.NewIntValue(rr.AtInt(i, j))
+	case TUInt:
+		return values.NewUIntValue(rr.AtUInt(i, j))
+	case TFloat:
+		return values.NewFloatValue(rr.AtFloat(i, j))
+	case TBool:
+		return values.NewBoolValue(rr.AtBool(i, j))
 	case TTime:
-		return compiler.NewTime(compiler.Time(rr.AtTime(i, j)))
+		return values.NewTimeValue(rr.AtTime(i, j))
 	default:
 		PanicUnknownType(t)
 		return nil
 	}
 }
 
-func AppendValue(builder BlockBuilder, j int, v compiler.Value) {
+func AppendValue(builder BlockBuilder, j int, v values.Value) {
 	switch k := v.Type().Kind(); k {
 	case semantic.Bool:
 		builder.AppendBool(j, v.Bool())
@@ -233,7 +238,7 @@ func AppendValue(builder BlockBuilder, j int, v compiler.Value) {
 	case semantic.String:
 		builder.AppendString(j, v.Str())
 	case semantic.Time:
-		builder.AppendTime(j, Time(v.Time()))
+		builder.AppendTime(j, v.Time())
 	default:
 		PanicUnknownType(ConvertFromKind(k))
 	}
@@ -262,3 +267,69 @@ func (c *colReferenceVisitor) Visit(node semantic.Node) semantic.Visitor {
 }
 
 func (c *colReferenceVisitor) Done() {}
+
+type Record struct {
+	t      semantic.Type
+	values map[string]values.Value
+}
+
+func NewRecord(t semantic.Type) *Record {
+	return &Record{
+		t:      t,
+		values: make(map[string]values.Value),
+	}
+}
+func (r *Record) Type() semantic.Type {
+	return r.t
+}
+
+func (r *Record) Str() string {
+	panic(values.UnexpectedKind(semantic.Object, semantic.String))
+}
+func (r *Record) Int() int64 {
+	panic(values.UnexpectedKind(semantic.Object, semantic.Int))
+}
+func (r *Record) UInt() uint64 {
+	panic(values.UnexpectedKind(semantic.Object, semantic.UInt))
+}
+func (r *Record) Float() float64 {
+	panic(values.UnexpectedKind(semantic.Object, semantic.Float))
+}
+func (r *Record) Bool() bool {
+	panic(values.UnexpectedKind(semantic.Object, semantic.Bool))
+}
+func (r *Record) Time() values.Time {
+	panic(values.UnexpectedKind(semantic.Object, semantic.Time))
+}
+func (r *Record) Duration() values.Duration {
+	panic(values.UnexpectedKind(semantic.Object, semantic.Duration))
+}
+func (r *Record) Regexp() *regexp.Regexp {
+	panic(values.UnexpectedKind(semantic.Object, semantic.Regexp))
+}
+func (r *Record) Array() values.Array {
+	panic(values.UnexpectedKind(semantic.Object, semantic.Array))
+}
+func (r *Record) Object() values.Object {
+	return r
+}
+func (r *Record) Function() values.Function {
+	panic(values.UnexpectedKind(semantic.Object, semantic.Function))
+}
+
+func (r *Record) Set(name string, v values.Value) {
+	r.values[name] = v
+}
+func (r *Record) Get(name string) (values.Value, bool) {
+	v, ok := r.values[name]
+	return v, ok
+}
+func (r *Record) Len() int {
+	return len(r.values)
+}
+
+func (r *Record) Range(f func(name string, v values.Value)) {
+	for k, v := range r.values {
+		f(k, v)
+	}
+}

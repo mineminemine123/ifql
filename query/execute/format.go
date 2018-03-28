@@ -7,6 +7,8 @@ import (
 	"strings"
 )
 
+const fixedWidthTimeFmt = "2006-01-02T15:04:05.000000000Z"
+
 // Formatter writes a block to a Writer.
 type Formatter struct {
 	b         Block
@@ -62,11 +64,11 @@ func (w *writeToHelper) write(data []byte) {
 }
 
 var minWidthsByType = map[DataType]int{
-	TBool:    7,
-	TInt:     22,
-	TUInt:    22,
-	TFloat:   22,
-	TString:  15,
+	TBool:    12,
+	TInt:     26,
+	TUInt:    27,
+	TFloat:   28,
+	TString:  22,
 	TTime:    len(fixedWidthTimeFmt),
 	TInvalid: 10,
 }
@@ -185,13 +187,14 @@ func (f *Formatter) makePaddingBuffers() {
 func (f *Formatter) writeHeader(w *writeToHelper) {
 	for oj, c := range f.cols.cols {
 		j := f.cols.Idx(oj)
-		buf := []byte(c.Label)
+		buf := append(append([]byte(c.Label), ':'), []byte(c.Type.String())...)
 		w.write(f.pad[:f.widths[j]-len(buf)])
 		w.write(buf)
 		w.write(f.pad[:2])
 	}
 	w.write(eol)
 }
+
 func (f *Formatter) writeHeaderSeparator(w *writeToHelper) {
 	for oj := range f.cols.cols {
 		j := f.cols.Idx(oj)

@@ -1,6 +1,20 @@
 package execute
 
-import "fmt"
+import (
+	"fmt"
+	"math"
+	"time"
+
+	"github.com/influxdata/ifql/values"
+)
+
+type Time = values.Time
+type Duration = values.Duration
+
+const (
+	MaxTime = math.MaxInt64
+	MinTime = math.MinInt64
+)
 
 type Bounds struct {
 	Start Time
@@ -30,4 +44,8 @@ func (b Bounds) Equal(o Bounds) bool {
 
 func (b Bounds) Shift(d Duration) Bounds {
 	return Bounds{Start: b.Start.Add(d), Stop: b.Stop.Add(d)}
+}
+
+func Now() Time {
+	return values.ConvertTime(time.Now())
 }

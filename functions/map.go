@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"log"
 
+	"github.com/influxdata/ifql/interpreter"
 	"github.com/influxdata/ifql/query"
 	"github.com/influxdata/ifql/query/execute"
 	"github.com/influxdata/ifql/query/plan"
@@ -36,12 +37,12 @@ func createMapOpSpec(args query.Arguments, a *query.Administration) (query.Opera
 	if err != nil {
 		return nil, err
 	}
-	resolved, err := f.Resolve()
+	fn, err := interpreter.ResolveFunction(f)
 	if err != nil {
 		return nil, err
 	}
 	return &MapOpSpec{
-		Fn: resolved,
+		Fn: fn,
 	}, nil
 }
 
@@ -170,7 +171,7 @@ func (t *mapTransformation) Process(id execute.DatasetID, b execute.Block) error
 				case execute.TagColKind:
 					builder.AppendString(j, rr.AtString(i, colMap[j]))
 				case execute.ValueColKind:
-					v := m.Get(c.Label)
+					v, _ := m.Get(c.Label)
 					execute.AppendValue(builder, j, v)
 				default:
 					log.Printf("unknown column kind %v", c.Kind)

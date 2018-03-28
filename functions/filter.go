@@ -5,6 +5,7 @@ import (
 	"log"
 
 	"github.com/influxdata/ifql/ast"
+	"github.com/influxdata/ifql/interpreter"
 	"github.com/influxdata/ifql/query"
 	"github.com/influxdata/ifql/query/execute"
 	"github.com/influxdata/ifql/query/plan"
@@ -38,13 +39,13 @@ func createFilterOpSpec(args query.Arguments, a *query.Administration) (query.Op
 		return nil, err
 	}
 
-	resolved, err := f.Resolve()
+	fn, err := interpreter.ResolveFunction(f)
 	if err != nil {
 		return nil, err
 	}
 
 	return &FilterOpSpec{
-		Fn: resolved,
+		Fn: fn,
 	}, nil
 }
 func newFilterOp() query.OperationSpec {

@@ -11,6 +11,7 @@ import (
 
 	"github.com/influxdata/ifql/complete"
 	_ "github.com/influxdata/ifql/functions"
+	"github.com/influxdata/ifql/interpreter"
 	"github.com/influxdata/ifql/query"
 
 	"github.com/influxdata/ifql/query/control"
@@ -59,5 +60,6 @@ func NewController(conf Config) (*Controller, error) {
 // DefaultCompleter create a completer with builtin scope and declarations
 func DefaultCompleter() complete.Completer {
 	scope, declarations := query.BuiltIns()
-	return complete.NewCompleter(scope, declarations)
+	interpScope := interpreter.NewScopeWithValues(scope)
+	return complete.NewCompleter(interpScope, declarations)
 }

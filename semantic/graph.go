@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"regexp"
 	"strconv"
+	"sync/atomic"
 	"time"
 
 	"github.com/influxdata/ifql/ast"
@@ -258,15 +259,18 @@ func (s *ExternalVariableDeclaration) Copy() Node {
 
 type ArrayExpression struct {
 	Elements []Expression `json:"elements"`
-	typ      Type
+	typ      atomic.Value //    Type
 }
 
 func (*ArrayExpression) NodeType() string { return "ArrayExpression" }
 func (e *ArrayExpression) Type() Type {
-	if e.typ == nil {
-		e.typ = arrayTypeOf(e)
+	t := e.typ.Load()
+	if t != nil {
+		return t.(Type)
 	}
-	return e.typ
+	typ := arrayTypeOf(e)
+	e.typ.Store(typ)
+	return typ
 }
 
 func (e *ArrayExpression) Copy() Node {
@@ -289,16 +293,18 @@ func (e *ArrayExpression) Copy() Node {
 type FunctionExpression struct {
 	Params []*FunctionParam `json:"params"`
 	Body   Node             `json:"body"`
-	typ    Type
+	typ    atomic.Value     //Type
 }
 
 func (*FunctionExpression) NodeType() string { return "ArrowFunctionExpression" }
 func (e *FunctionExpression) Type() Type {
-	if e.typ == nil {
-		e.typ = functionTypeOf(e)
+	t := e.typ.Load()
+	if t != nil {
+		return t.(Type)
 	}
-	return e.typ
-
+	typ := functionTypeOf(e)
+	e.typ.Store(typ)
+	return typ
 }
 
 func (e *FunctionExpression) Copy() Node {
@@ -392,7 +398,7 @@ type CallExpression struct {
 
 func (*CallExpression) NodeType() string { return "CallExpression" }
 func (e *CallExpression) Type() Type {
-	return e.Callee.Type()
+	return e.Callee.Type().ReturnType()
 }
 
 func (e *CallExpression) Copy() Node {
@@ -480,16 +486,19 @@ func (e *MemberExpression) Copy() Node {
 }
 
 type ObjectExpression struct {
-	Properties []*Property `json:"properties"`
-	typ        Type
+	Properties []*Property  `json:"properties"`
+	typ        atomic.Value //Type
 }
 
 func (*ObjectExpression) NodeType() string { return "ObjectExpression" }
 func (e *ObjectExpression) Type() Type {
-	if e.typ == nil {
-		e.typ = objectTypeOf(e)
+	t := e.typ.Load()
+	if t != nil {
+		return t.(Type)
 	}
-	return e.typ
+	typ := objectTypeOf(e)
+	e.typ.Store(typ)
+	return typ
 }
 
 func (e *ObjectExpression) Copy() Node {
@@ -742,6 +751,49 @@ func New(prog *ast.Program, declarations map[string]VariableDeclaration) (*Progr
 		declarations = make(map[string]VariableDeclaration)
 	}
 	return analyzeProgram(prog, DeclarationScope(declarations))
+}
+
+// SolveTypes inspects the expression and ensures that all sub expressions konw their type
+func SolveTypes(n Node, declarations DeclarationScope) {
+	if declarations == nil {
+		declarations = make(DeclarationScope)
+	}
+	// TODO(nathanielc): Use a formal type inference system like Hindley-Milner
+	// TODO(nathanielc): The current implementation only implements the code paths that the current tests and common use cases need.
+	// The implementation is by no means complete for all possible expressions.
+	v := solverVisitor{
+		declarations: declarations,
+	}
+	Walk(v, n)
+}
+
+type solverVisitor struct {
+	declarations DeclarationScope
+}
+
+func (v solverVisitor) Done() {}
+func (v solverVisitor) Visit(n Node) Visitor {
+	switch n := n.(type) {
+	case *NativeVariableDeclaration:
+		v.declarations[n.Identifier.Name] = n
+	case *FunctionExpression:
+		funcDeclarations := v.declarations.Copy()
+		nv := solverVisitor{
+			declarations: funcDeclarations,
+		}
+		return nv
+	case *FunctionParam:
+		n.Type()
+		if n.declaration != nil {
+			v.declarations[n.Key.Name] = n.declaration
+		}
+	case *IdentifierExpression:
+		declaration, ok := v.declarations[n.Name]
+		if ok {
+			n.declaration = declaration
+		}
+	}
+	return v
 }
 
 type DeclarationScope map[string]VariableDeclaration
@@ -1023,9 +1075,10 @@ func (v *applyDeclarationsVisitor) Visit(n Node) Visitor {
 		}
 		// No need to walk further down this branch
 		return nil
-	case *FunctionExpression:
-		// Remove type information since we may have changed it.
-		n.typ = nil
+	// TODO(nathanielc): Support polymorphic function arguments
+	//case *FunctionExpression:
+	//	// Remove type information since we may have changed it.
+	//	n.typ.Store((Type)(Invalid))
 	case *FunctionParam:
 		if n.declaration == nil {
 			n.declaration = v.declarations[n.Key.Name]

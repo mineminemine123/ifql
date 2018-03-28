@@ -22,6 +22,7 @@ import (
 	"github.com/influxdata/ifql/query/control"
 	"github.com/influxdata/ifql/query/execute"
 	"github.com/influxdata/ifql/semantic"
+	"github.com/influxdata/ifql/values"
 	"github.com/pkg/errors"
 )
 
@@ -29,13 +30,12 @@ type REPL struct {
 	scope        *interpreter.Scope
 	declarations semantic.DeclarationScope
 	c            *control.Controller
-	d            query.Domain
 
 	cancelMu   sync.Mutex
 	cancelFunc context.CancelFunc
 }
 
-func addBuiltIn(script string, d query.Domain, scope *interpreter.Scope, declarations semantic.DeclarationScope) error {
+func addBuiltIn(script string, scope *interpreter.Scope, declarations semantic.DeclarationScope) error {
 	astProg, err := parser.NewAST(script)
 	if err != nil {
 		return errors.Wrap(err, "failed to parse builtin")
@@ -45,7 +45,7 @@ func addBuiltIn(script string, d query.Domain, scope *interpreter.Scope, declara
 		return errors.Wrap(err, "failed to create semantic graph for builtin")
 	}
 
-	if err := interpreter.Eval(semProg, scope, d); err != nil {
+	if err := interpreter.Eval(semProg, scope); err != nil {
 		return errors.Wrap(err, "failed to evaluate builtin")
 	}
 	return nil
@@ -53,13 +53,12 @@ func addBuiltIn(script string, d query.Domain, scope *interpreter.Scope, declara
 
 func New(c *control.Controller) *REPL {
 	scope, declarations := query.BuiltIns()
-	d := query.NewDomain()
-	addBuiltIn("run = () => yield(table:_)", d, scope, declarations)
+	interpScope := interpreter.NewScopeWithValues(scope)
+	addBuiltIn("run = () => yield(table:_)", interpScope, declarations)
 	return &REPL{
-		scope:        scope,
+		scope:        interpScope,
 		declarations: declarations,
 		c:            c,
-		d:            d,
 	}
 }
 
@@ -134,7 +133,7 @@ func (r *REPL) input(t string) {
 
 // executeLine processes a line of input.
 // If the input evaluates to a valid value, that value is returned.
-func (r *REPL) executeLine(t string, expectYield bool) (interpreter.Value, error) {
+func (r *REPL) executeLine(t string, expectYield bool) (values.Value, error) {
 	if t == "" {
 		return nil, nil
 	}
@@ -157,7 +156,7 @@ func (r *REPL) executeLine(t string, expectYield bool) (interpreter.Value, error
 		return nil, err
 	}
 
-	if err := interpreter.Eval(semProg, r.scope, r.d); err != nil {
+	if err := interpreter.Eval(semProg, r.scope); err != nil {
 		return nil, err
 	}
 
@@ -166,7 +165,7 @@ func (r *REPL) executeLine(t string, expectYield bool) (interpreter.Value, error
 	// Check for yield and execute query
 	if v.Type() == query.TableObjectType {
 		t := v.(query.TableObject)
-		if !expectYield || (expectYield && t.Kind() == functions.YieldKind) {
+		if !expectYield || (expectYield && t.Kind == functions.YieldKind) {
 			spec := t.ToSpec()
 			// Do query
 			return nil, r.doQuery(spec)
