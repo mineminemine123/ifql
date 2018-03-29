@@ -90,14 +90,35 @@ func (t *cumulativeSumTransformation) Process(id execute.DatasetID, b execute.Bl
 	if new {
 		execute.AddBlockCols(b, builder)
 	}
-	//timeIdx := execute.TimeIdx(b.Cols())
-	//valueIdx := execute.ValueIdx(b.Cols())
-	values, err := b.Values()
-	if err != nil {
-		return err
-	}
-	values.DoFloat(func(vs []float64, rr execute.RowReader) {
-		//builder.AppendFloat(int, float64)
+	columns := b.Cols()
+	cumulativeSums := cumulativeSumSlice(columns)
+	b.Times().DoTime(func(ts []execute.Time, rr execute.RowReader) {
+		for i, _ := range ts {
+			for j, c := range columns {
+				switch c.Kind {
+				case execute.TimeColKind:
+					builder.AppendTime(j, rr.AtTime(i, j))
+				case execute.ValueColKind:
+					switch c.Type {
+					case execute.TInt:
+						cumSum := cumulativeSums[j].addInt(rr.AtInt(i,j))
+						builder.AppendInt(j, cumSum)
+					case execute.TUInt:
+						cumSum := cumulativeSums[j].addUInt(rr.AtUInt(i,j))
+						builder.AppendUInt(j, cumSum)
+					case execute.TFloat:
+						cumSum := cumulativeSums[j].addFloat(rr.AtFloat(i,j))
+						builder.AppendFloat(j, cumSum)
+					case execute.TBool:
+						builder.AppendBool(j, rr.AtBool(i, j))
+					case execute.TString:
+						builder.AppendString(j, rr.AtString(i, j))
+					}
+				case execute.TagColKind:
+					builder.AppendString(j, rr.AtString(i, j))
+				}
+			}
+		}
 	})
 	return nil
 }
@@ -110,4 +131,33 @@ func (t *cumulativeSumTransformation) UpdateProcessingTime(id execute.DatasetID,
 }
 func (t *cumulativeSumTransformation) Finish(id execute.DatasetID, err error) {
 	t.d.Finish(err)
+}
+
+type cumulativeSum struct {
+	intVal	 int64
+	uintVal	 uint64
+	floatVal float64
+}
+
+func (cumSum *cumulativeSum) addInt(val int64) int64 {
+	cumSum.intVal += val
+	return cumSum.intVal
+}
+
+func (cumSum *cumulativeSum) addUInt(val uint64) uint64 {
+	cumSum.uintVal += val
+	return cumSum.uintVal
+}
+
+func (cumSum *cumulativeSum) addFloat(val float64) float64 {
+	cumSum.floatVal += val
+	return cumSum.floatVal
+}
+
+func cumulativeSumSlice(columns []execute.ColMeta) []*cumulativeSum {
+	sumSlice := make([]*cumulativeSum, len(columns))
+	for j, _ := range columns {
+		sumSlice[j] = &cumulativeSum{}
+	}
+	return sumSlice
 }
