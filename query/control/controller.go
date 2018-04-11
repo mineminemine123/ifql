@@ -95,7 +95,6 @@ func (c *Controller) createQuery(ctx context.Context) *Query {
 		c:         c,
 		now:       time.Now().UTC(),
 		ready:     ready,
-		Ready:     ready,
 		parentCtx: cctx,
 		cancel:    cancel,
 	}
@@ -259,11 +258,7 @@ type Query struct {
 
 	err error
 
-	ready chan<- map[string]execute.Result
-	// Ready is a channel that will deliver the query results.
-	// The channel may be closed before any results arrive, in which case the query should be
-	// inspected for an error using Err().
-	Ready <-chan map[string]execute.Result
+	ready chan map[string]execute.Result
 
 	mu     sync.Mutex
 	state  State
@@ -306,6 +301,13 @@ func (q *Query) Cancel() {
 	// This allows for receiving from the Ready channel in the same goroutine
 	// that has called defer q.Done()
 	q.finish()
+}
+
+// Ready returns a channel that will deliver the query results.
+// Its possible that the channel is closed before any results arrive, in which case the query should be
+// inspected for an error using Err().
+func (q *Query) Ready() <-chan map[string]execute.Result {
+	return q.ready
 }
 
 // finish informs the controller and the Ready channel that the query is finished.

@@ -14,6 +14,8 @@ import (
 	"github.com/influxdata/ifql"
 	"github.com/influxdata/ifql/idfile"
 	"github.com/influxdata/ifql/query"
+	"github.com/influxdata/ifql/query/crossexecute"
+	"github.com/influxdata/ifql/query/crossexecute/influxql"
 	"github.com/influxdata/ifql/query/execute"
 	"github.com/influxdata/ifql/tracing"
 	"github.com/influxdata/influxdb/models"
@@ -91,6 +93,7 @@ func main() {
 
 	http.Handle("/metrics", promhttp.Handler())
 	http.Handle("/query", http.HandlerFunc(HandleQuery))
+	http.Handle("/influxql/query", http.HandlerFunc(HandleInfluxQLQuery))
 	http.Handle("/queries", http.HandlerFunc(HandleQueries))
 
 	if !opts.ReportingDisabled {
@@ -108,6 +111,26 @@ func main() {
 
 // TODO (pauldix): pull all this out into a server object that can
 //                 be tested. Alas, demo day waits for no person.
+
+// HandleInfluxQLQuery transpiles and executes the InfluxQL query.
+func HandleInfluxQLQuery(w http.ResponseWriter, req *http.Request) {
+	queryStr := req.FormValue("q")
+	if queryStr == "" {
+		w.WriteHeader(http.StatusBadRequest)
+		w.Write([]byte("must pass query in q parameter"))
+		return
+	}
+	if opts.Verbose {
+		log.Print(queryStr)
+	}
+
+	err := crossexecute.CrossExecute(req.Context(), queryStr, controller, new(influxql.Transpiler), influxql.Writer{}, w)
+	if err != nil {
+		w.WriteHeader(http.StatusBadRequest)
+		w.Write([]byte(err.Error()))
+		return
+	}
+}
 
 // HandleQuery interprets and executes ifql syntax and returns results
 func HandleQuery(w http.ResponseWriter, req *http.Request) {
@@ -180,7 +203,7 @@ func HandleQuery(w http.ResponseWriter, req *http.Request) {
 		functionCounter.WithLabelValues(f).Inc()
 	}
 
-	results, ok := <-q.Ready
+	results, ok := <-q.Ready()
 	if !ok {
 		err := q.Err()
 		w.WriteHeader(http.StatusInternalServerError)
