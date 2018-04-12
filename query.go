@@ -47,7 +47,7 @@ func NewController(conf Config) (*Controller, error) {
 		MemoryBytesQuota: int64(conf.MemoryBytesQuota),
 		ExecutorConfig: execute.Config{
 			"storage": storage.Config{
-				Hosts: conf.Hosts,
+				HostLookup: storage.NewStaticLookup(conf.Hosts),
 			},
 		},
 		Verbose: conf.Verbose,
