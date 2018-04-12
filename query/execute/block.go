@@ -661,7 +661,7 @@ func (b ColListBlockBuilder) SetString(i int, j int, value string) {
 }
 func (b ColListBlockBuilder) AppendString(j int, value string) {
 	meta := b.blk.cols[j].Meta()
-	checkColType(meta, TString)
+	CheckColType(meta, TString)
 	if meta.Common {
 		v := b.blk.cols[j].(*commonStrColumn).value
 		if value != v {
@@ -681,7 +681,7 @@ func (b ColListBlockBuilder) AppendStrings(j int, values []string) {
 }
 func (b ColListBlockBuilder) SetCommonString(j int, value string) {
 	meta := b.blk.cols[j].Meta()
-	checkColType(meta, TString)
+	CheckColType(meta, TString)
 	if !meta.Common {
 		panic(fmt.Errorf("cannot set common value for column %s, column is not marked as common", meta.Label))
 	}
@@ -712,10 +712,10 @@ func (b ColListBlockBuilder) AppendTimes(j int, values []Time) {
 }
 
 func (b ColListBlockBuilder) checkColType(j int, typ DataType) {
-	checkColType(b.blk.colMeta[j], typ)
+	CheckColType(b.blk.colMeta[j], typ)
 }
 
-func checkColType(col ColMeta, typ DataType) {
+func CheckColType(col ColMeta, typ DataType) {
 	if col.Type != typ {
 		panic(fmt.Errorf("column %s is not of type %v", col.Label, typ))
 	}
@@ -831,31 +831,31 @@ func (b *ColListBlock) Times() ValueIterator {
 	return nil
 }
 func (b *ColListBlock) AtBool(i, j int) bool {
-	checkColType(b.colMeta[j], TBool)
+	CheckColType(b.colMeta[j], TBool)
 	return b.cols[j].(*boolColumn).data[i]
 }
 func (b *ColListBlock) AtInt(i, j int) int64 {
-	checkColType(b.colMeta[j], TInt)
+	CheckColType(b.colMeta[j], TInt)
 	return b.cols[j].(*intColumn).data[i]
 }
 func (b *ColListBlock) AtUInt(i, j int) uint64 {
-	checkColType(b.colMeta[j], TUInt)
+	CheckColType(b.colMeta[j], TUInt)
 	return b.cols[j].(*uintColumn).data[i]
 }
 func (b *ColListBlock) AtFloat(i, j int) float64 {
-	checkColType(b.colMeta[j], TFloat)
+	CheckColType(b.colMeta[j], TFloat)
 	return b.cols[j].(*floatColumn).data[i]
 }
 func (b *ColListBlock) AtString(i, j int) string {
 	meta := b.colMeta[j]
-	checkColType(meta, TString)
+	CheckColType(meta, TString)
 	if meta.IsTag() && meta.Common {
 		return b.cols[j].(*commonStrColumn).value
 	}
 	return b.cols[j].(*stringColumn).data[i]
 }
 func (b *ColListBlock) AtTime(i, j int) Time {
-	checkColType(b.colMeta[j], TTime)
+	CheckColType(b.colMeta[j], TTime)
 	return b.cols[j].(*timeColumn).data[i]
 }
 
@@ -887,24 +887,24 @@ func (itr colListValueIterator) Cols() []ColMeta {
 	return itr.colMeta
 }
 func (itr colListValueIterator) DoBool(f func([]bool, RowReader)) {
-	checkColType(itr.colMeta[itr.col], TBool)
+	CheckColType(itr.colMeta[itr.col], TBool)
 	f(itr.cols[itr.col].(*boolColumn).data, itr)
 }
 func (itr colListValueIterator) DoInt(f func([]int64, RowReader)) {
-	checkColType(itr.colMeta[itr.col], TInt)
+	CheckColType(itr.colMeta[itr.col], TInt)
 	f(itr.cols[itr.col].(*intColumn).data, itr)
 }
 func (itr colListValueIterator) DoUInt(f func([]uint64, RowReader)) {
-	checkColType(itr.colMeta[itr.col], TUInt)
+	CheckColType(itr.colMeta[itr.col], TUInt)
 	f(itr.cols[itr.col].(*uintColumn).data, itr)
 }
 func (itr colListValueIterator) DoFloat(f func([]float64, RowReader)) {
-	checkColType(itr.colMeta[itr.col], TFloat)
+	CheckColType(itr.colMeta[itr.col], TFloat)
 	f(itr.cols[itr.col].(*floatColumn).data, itr)
 }
 func (itr colListValueIterator) DoString(f func([]string, RowReader)) {
 	meta := itr.colMeta[itr.col]
-	checkColType(meta, TString)
+	CheckColType(meta, TString)
 	if meta.IsTag() && meta.Common {
 		value := itr.cols[itr.col].(*commonStrColumn).value
 		strs := make([]string, itr.nrows)
@@ -916,35 +916,35 @@ func (itr colListValueIterator) DoString(f func([]string, RowReader)) {
 	f(itr.cols[itr.col].(*stringColumn).data, itr)
 }
 func (itr colListValueIterator) DoTime(f func([]Time, RowReader)) {
-	checkColType(itr.colMeta[itr.col], TTime)
+	CheckColType(itr.colMeta[itr.col], TTime)
 	f(itr.cols[itr.col].(*timeColumn).data, itr)
 }
 func (itr colListValueIterator) AtBool(i, j int) bool {
-	checkColType(itr.colMeta[j], TBool)
+	CheckColType(itr.colMeta[j], TBool)
 	return itr.cols[j].(*boolColumn).data[i]
 }
 func (itr colListValueIterator) AtInt(i, j int) int64 {
-	checkColType(itr.colMeta[j], TInt)
+	CheckColType(itr.colMeta[j], TInt)
 	return itr.cols[j].(*intColumn).data[i]
 }
 func (itr colListValueIterator) AtUInt(i, j int) uint64 {
-	checkColType(itr.colMeta[j], TUInt)
+	CheckColType(itr.colMeta[j], TUInt)
 	return itr.cols[j].(*uintColumn).data[i]
 }
 func (itr colListValueIterator) AtFloat(i, j int) float64 {
-	checkColType(itr.colMeta[j], TFloat)
+	CheckColType(itr.colMeta[j], TFloat)
 	return itr.cols[j].(*floatColumn).data[i]
 }
 func (itr colListValueIterator) AtString(i, j int) string {
 	meta := itr.colMeta[j]
-	checkColType(meta, TString)
+	CheckColType(meta, TString)
 	if meta.IsTag() && meta.Common {
 		return itr.cols[j].(*commonStrColumn).value
 	}
 	return itr.cols[j].(*stringColumn).data[i]
 }
 func (itr colListValueIterator) AtTime(i, j int) Time {
-	checkColType(itr.colMeta[j], TTime)
+	CheckColType(itr.colMeta[j], TTime)
 	return itr.cols[j].(*timeColumn).data[i]
 }
 

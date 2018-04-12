@@ -21,6 +21,8 @@ type Administration interface {
 	Allocator() *Allocator
 	Parents() []DatasetID
 	ConvertID(plan.ProcedureID) DatasetID
+
+	Config() Config
 }
 
 type CreateTransformation func(id DatasetID, mode AccumulationMode, spec plan.ProcedureSpec, a Administration) (Transformation, Dataset, error)

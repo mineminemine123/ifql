@@ -11,12 +11,12 @@ import (
 
 	"github.com/influxdata/ifql/complete"
 	_ "github.com/influxdata/ifql/functions"
+	"github.com/influxdata/ifql/functions/storage"
 	"github.com/influxdata/ifql/interpreter"
 	"github.com/influxdata/ifql/query"
 
 	"github.com/influxdata/ifql/query/control"
 	"github.com/influxdata/ifql/query/execute"
-	"github.com/pkg/errors"
 )
 
 func init() {
@@ -42,15 +42,13 @@ type Controller = control.Controller
 type Query = control.Query
 
 func NewController(conf Config) (*Controller, error) {
-	s, err := execute.NewStorageReader(conf.Hosts)
-	if err != nil {
-		return nil, errors.Wrap(err, "failed to create storage reader")
-	}
 	c := control.Config{
 		ConcurrencyQuota: conf.ConcurrencyQuota,
 		MemoryBytesQuota: int64(conf.MemoryBytesQuota),
 		ExecutorConfig: execute.Config{
-			StorageReader: s,
+			"storage": storage.Config{
+				Hosts: conf.Hosts,
+			},
 		},
 		Verbose: conf.Verbose,
 	}

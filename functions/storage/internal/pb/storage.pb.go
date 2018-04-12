@@ -19,7 +19,7 @@
 		Node
 		Predicate
 */
-package storage
+package pb
 
 import proto "github.com/gogo/protobuf/proto"
 import fmt "fmt"

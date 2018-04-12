@@ -19,7 +19,7 @@ It has these top-level messages:
 	Node
 	Predicate
 */
-package storage
+package pb
 
 import (
 	context "context"

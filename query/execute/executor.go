@@ -18,10 +18,6 @@ type executor struct {
 	c Config
 }
 
-type Config struct {
-	StorageReader StorageReader
-}
-
 func NewExecutor(c Config) Executor {
 	e := &executor{
 		c: c,
@@ -31,7 +27,7 @@ func NewExecutor(c Config) Executor {
 
 type executionState struct {
 	p *plan.PlanSpec
-	c *Config
+	c Config
 
 	alloc *Allocator
 
@@ -69,7 +65,7 @@ func (e *executor) createExecutionState(ctx context.Context, p *plan.PlanSpec) (
 	}
 	es := &executionState{
 		p: p,
-		c: &e.c,
+		c: e.c,
 		alloc: &Allocator{
 			Limit: p.Resources.MemoryBytesQuota,
 		},
@@ -116,7 +112,10 @@ func (es *executionState) createNode(ctx context.Context, pr *plan.Procedure) (N
 
 	// If source create source
 	if createS, ok := procedureToSource[pr.Spec.Kind()]; ok {
-		s := createS(pr.Spec, DatasetID(pr.ID), es.c.StorageReader, ec)
+		s, err := createS(pr.Spec, DatasetID(pr.ID), ec)
+		if err != nil {
+			return nil, err
+		}
 		es.sources = append(es.sources, s)
 		return s, nil
 	}
@@ -224,4 +223,8 @@ func (ec executionContext) Parents() []DatasetID {
 }
 func (ec executionContext) ConvertID(id plan.ProcedureID) DatasetID {
 	return DatasetID(id)
+}
+
+func (ec executionContext) Config() Config {
+	return ec.es.c
 }
