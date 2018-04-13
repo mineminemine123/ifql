@@ -8,6 +8,7 @@ import (
 	"github.com/influxdata/ifql/interpreter"
 	"github.com/influxdata/ifql/query"
 	"github.com/influxdata/ifql/semantic"
+	"github.com/influxdata/ifql/values"
 )
 
 var scope *interpreter.Scope
@@ -15,12 +16,14 @@ var declarations semantic.DeclarationScope
 
 func init() {
 	query.FinalizeRegistration()
-	scope, declarations = query.BuiltIns()
+	s, d := query.BuiltIns()
+	scope = interpreter.NewScopeWithValues(s)
+	declarations = d
 }
 
 func TestNames(t *testing.T) {
 	s := interpreter.NewScope()
-	var v interpreter.Value
+	var v values.Value
 	s.Set("boom", v)
 	s.Set("tick", v)
 

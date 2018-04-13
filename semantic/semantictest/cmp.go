@@ -9,9 +9,9 @@ import (
 )
 
 var CmpOptions = []cmp.Option{
-	cmp.AllowUnexported(semantic.ArrayExpression{}),
-	cmp.AllowUnexported(semantic.ObjectExpression{}),
-	cmp.AllowUnexported(semantic.FunctionExpression{}),
+	cmpopts.IgnoreUnexported(semantic.ArrayExpression{}),
+	cmpopts.IgnoreUnexported(semantic.ObjectExpression{}),
+	cmpopts.IgnoreUnexported(semantic.FunctionExpression{}),
 	cmpopts.IgnoreUnexported(semantic.IdentifierExpression{}),
 	cmpopts.IgnoreUnexported(semantic.FunctionParam{}),
 	cmp.Comparer(func(x, y *regexp.Regexp) bool { return x.String() == y.String() }),

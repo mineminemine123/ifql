@@ -115,4 +115,6 @@ var binaryTypesLookup = map[binarySignature]Kind{
 
 	{operator: ast.NotRegexpMatchOperator, left: String, right: Regexp}: Bool,
 	{operator: ast.NotRegexpMatchOperator, left: Regexp, right: String}: Bool,
+
+	{operator: ast.AdditionOperator, left: String, right: String}: String,
 }

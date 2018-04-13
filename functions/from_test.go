@@ -17,7 +17,7 @@ func TestFrom_NewQuery(t *testing.T) {
 			WantErr: true,
 		},
 		{
-			Name:    "from",
+			Name:    "from repeat arg",
 			Raw:     `from(db:"telegraf", db:"oops")`,
 			WantErr: true,
 		},

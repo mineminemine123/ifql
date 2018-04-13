@@ -3,6 +3,7 @@ package functions
 import (
 	"fmt"
 
+	"github.com/influxdata/ifql/interpreter"
 	"github.com/influxdata/ifql/query"
 	"github.com/influxdata/ifql/query/execute"
 	"github.com/influxdata/ifql/query/plan"
@@ -42,7 +43,10 @@ func createFromOpSpec(args query.Arguments, a *query.Administration) (query.Oper
 	if array, ok, err := args.GetArray("hosts", semantic.String); err != nil {
 		return nil, err
 	} else if ok {
-		spec.Hosts = array.AsStrings()
+		spec.Hosts, err = interpreter.ToStringArray(array)
+		if err != nil {
+			return nil, err
+		}
 	}
 	return spec, nil
 }

@@ -2,7 +2,7 @@ package interpreter_test
 
 import (
 	"errors"
-	"fmt"
+	"regexp"
 	"testing"
 
 	"github.com/google/go-cmp/cmp"
@@ -11,54 +11,69 @@ import (
 	"github.com/influxdata/ifql/parser"
 	"github.com/influxdata/ifql/semantic"
 	"github.com/influxdata/ifql/semantic/semantictest"
+	"github.com/influxdata/ifql/values"
 )
 
 var testScope = interpreter.NewScope()
-var testDeclarations = make(map[string]semantic.VariableDeclaration)
+var testDeclarations = make(semantic.DeclarationScope)
+
+func addFunc(f function) {
+	testScope.Set(f.name, f)
+	testDeclarations[f.name] = semantic.NewExternalVariableDeclaration(f.name, f.t)
+}
 
 func init() {
-	testScope.Set("fortyTwo", function{
+	addFunc(function{
 		name: "fortyTwo",
-		call: func(args interpreter.Arguments, d interpreter.Domain) (interpreter.Value, error) {
-			return interpreter.NewFloatValue(42.0), nil
+		t: semantic.NewFunctionType(semantic.FunctionSignature{
+			ReturnType: semantic.Float,
+		}),
+		call: func(args values.Object) (values.Value, error) {
+			return values.NewFloatValue(42.0), nil
 		},
 	})
-	testScope.Set("six", function{
+	addFunc(function{
 		name: "six",
-		call: func(args interpreter.Arguments, d interpreter.Domain) (interpreter.Value, error) {
-			return interpreter.NewFloatValue(6.0), nil
+		t: semantic.NewFunctionType(semantic.FunctionSignature{
+			ReturnType: semantic.Float,
+		}),
+		call: func(args values.Object) (values.Value, error) {
+			return values.NewFloatValue(6.0), nil
 		},
 	})
-	testScope.Set("nine", function{
+	addFunc(function{
 		name: "nine",
-		call: func(args interpreter.Arguments, d interpreter.Domain) (interpreter.Value, error) {
-			return interpreter.NewFloatValue(9.0), nil
+		t: semantic.NewFunctionType(semantic.FunctionSignature{
+			ReturnType: semantic.Float,
+		}),
+		call: func(args values.Object) (values.Value, error) {
+			return values.NewFloatValue(9.0), nil
 		},
 	})
-	testScope.Set("fail", function{
+	addFunc(function{
 		name: "fail",
-		call: func(args interpreter.Arguments, d interpreter.Domain) (interpreter.Value, error) {
+		t: semantic.NewFunctionType(semantic.FunctionSignature{
+			ReturnType: semantic.Bool,
+		}),
+		call: func(args values.Object) (values.Value, error) {
 			return nil, errors.New("fail")
 		},
 	})
-	testScope.Set("plusOne", function{
+	addFunc(function{
 		name: "plusOne",
-		call: func(args interpreter.Arguments, d interpreter.Domain) (interpreter.Value, error) {
-			v, err := args.GetRequiredFloat("x")
-			if err != nil {
-				return nil, err
-			}
-			return interpreter.NewFloatValue(v + 1), nil
-		},
-	})
-	testDeclarations["plusOne"] = semantic.NewExternalVariableDeclaration(
-		"plusOne",
-		semantic.NewFunctionType(semantic.FunctionSignature{
+		t: semantic.NewFunctionType(semantic.FunctionSignature{
 			Params:       map[string]semantic.Type{"x": semantic.Float},
 			ReturnType:   semantic.Float,
 			PipeArgument: "x",
 		}),
-	)
+		call: func(args values.Object) (values.Value, error) {
+			v, ok := args.Get("x")
+			if !ok {
+				return nil, errors.New("missing argument x")
+			}
+			return values.NewFloatValue(v.Float() + 1), nil
+		},
+	})
 }
 
 // TestEval tests whether a program can run to completion or not
@@ -75,6 +90,16 @@ func TestEval(t *testing.T) {
 		{
 			name:    "call function with fail",
 			query:   "fail()",
+			wantErr: true,
+		},
+		{
+			name:    "call function with duplicate args",
+			query:   "plusOne(x:1.0, x:2.0)",
+			wantErr: true,
+		},
+		{
+			name:    "call function with missing args",
+			query:   "plusOne()",
 			wantErr: true,
 		},
 		{
@@ -219,12 +244,12 @@ func TestEval(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			graph, err := semantic.New(program, testDeclarations)
+			graph, err := semantic.New(program, testDeclarations.Copy())
 			if err != nil {
 				t.Fatal(err)
 			}
 
-			err = interpreter.Eval(graph, testScope.Nest(), nil)
+			err = interpreter.Eval(graph, testScope.Nest())
 			if !tc.wantErr && err != nil {
 				t.Fatal(err)
 			} else if tc.wantErr && err == nil {
@@ -234,23 +259,39 @@ func TestEval(t *testing.T) {
 	}
 
 }
-func TestFunction_Resolve(t *testing.T) {
-	var got *semantic.FunctionExpression
+func TestResolver(t *testing.T) {
+	var got semantic.Expression
 	scope := interpreter.NewScope()
-	scope.Set("resolver", function{
+	declarations := make(semantic.DeclarationScope)
+	f := function{
 		name: "resolver",
-		call: func(args interpreter.Arguments, d interpreter.Domain) (interpreter.Value, error) {
-			f, err := args.GetRequiredFunction("f")
+		t: semantic.NewFunctionType(semantic.FunctionSignature{
+			Params: map[string]semantic.Type{
+				"f": semantic.NewFunctionType(semantic.FunctionSignature{
+					Params: map[string]semantic.Type{"r": semantic.Int},
+				}),
+			},
+			ReturnType: semantic.Int,
+		}),
+		call: func(args values.Object) (values.Value, error) {
+			f, ok := args.Get("f")
+			if !ok {
+				return nil, errors.New("missing argument f")
+			}
+			resolver, ok := f.Function().(interpreter.Resolver)
+			if !ok {
+				return nil, errors.New("function cannot be resolved")
+			}
+			g, err := resolver.Resolve()
 			if err != nil {
 				return nil, err
 			}
-			got, err = f.Resolve()
-			if err != nil {
-				return nil, err
-			}
+			got = g.(semantic.Expression)
 			return nil, nil
 		},
-	})
+	}
+	scope.Set(f.name, f)
+	declarations[f.name] = semantic.NewExternalVariableDeclaration(f.name, f.t)
 
 	program, err := parser.NewAST(`
 	x = 42
@@ -265,7 +306,7 @@ func TestFunction_Resolve(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	if err := interpreter.Eval(graph, scope, nil); err != nil {
+	if err := interpreter.Eval(graph, scope); err != nil {
 		t.Fatal(err)
 	}
 
@@ -280,29 +321,55 @@ func TestFunction_Resolve(t *testing.T) {
 	if !cmp.Equal(want, got, semantictest.CmpOptions...) {
 		t.Errorf("unexpected resoved function: -want/+got\n%s", cmp.Diff(want, got, semantictest.CmpOptions...))
 	}
+	if wt, gt := want.Type(), got.Type(); wt != gt {
+		t.Errorf("unexpected resoved function types: want: %v got: %v", wt, gt)
+	}
 }
 
 type function struct {
 	name string
-	call func(args interpreter.Arguments, d interpreter.Domain) (interpreter.Value, error)
+	t    semantic.Type
+	call func(args values.Object) (values.Value, error)
 }
 
 func (f function) Type() semantic.Type {
-	//TODO(nathanielc): Return a complete function type
-	return semantic.Function
+	return f.t
 }
 
-func (f function) Value() interface{} {
+func (f function) Str() string {
+	panic(values.UnexpectedKind(semantic.Object, semantic.String))
+}
+func (f function) Int() int64 {
+	panic(values.UnexpectedKind(semantic.Object, semantic.Int))
+}
+func (f function) UInt() uint64 {
+	panic(values.UnexpectedKind(semantic.Object, semantic.UInt))
+}
+func (f function) Float() float64 {
+	panic(values.UnexpectedKind(semantic.Object, semantic.Float))
+}
+func (f function) Bool() bool {
+	panic(values.UnexpectedKind(semantic.Object, semantic.Bool))
+}
+func (f function) Time() values.Time {
+	panic(values.UnexpectedKind(semantic.Object, semantic.Time))
+}
+func (f function) Duration() values.Duration {
+	panic(values.UnexpectedKind(semantic.Object, semantic.Duration))
+}
+func (f function) Regexp() *regexp.Regexp {
+	panic(values.UnexpectedKind(semantic.Object, semantic.Regexp))
+}
+func (f function) Array() values.Array {
+	panic(values.UnexpectedKind(semantic.Object, semantic.Function))
+}
+func (f function) Object() values.Object {
+	panic(values.UnexpectedKind(semantic.Object, semantic.Object))
+}
+func (f function) Function() values.Function {
 	return f
 }
-func (f function) Property(name string) (interpreter.Value, error) {
-	return nil, fmt.Errorf("property %q does not exist", name)
-}
 
-func (f function) Call(args interpreter.Arguments, d interpreter.Domain) (interpreter.Value, error) {
-	return f.call(args, d)
-}
-
-func (f function) Resolve() (*semantic.FunctionExpression, error) {
-	return nil, fmt.Errorf("function %q cannot be resolved", f.name)
+func (f function) Call(args values.Object) (values.Value, error) {
+	return f.call(args)
 }

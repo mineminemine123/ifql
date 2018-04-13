@@ -6,34 +6,39 @@ import (
 
 	"github.com/influxdata/ifql/ast"
 	"github.com/influxdata/ifql/semantic"
+	"github.com/influxdata/ifql/values"
 )
 
 type Evaluator interface {
 	Type() semantic.Type
-	EvalBool(scope Scope) bool
+	EvalString(scope Scope) string
 	EvalInt(scope Scope) int64
 	EvalUInt(scope Scope) uint64
 	EvalFloat(scope Scope) float64
-	EvalString(scope Scope) string
+	EvalBool(scope Scope) bool
+	EvalTime(scope Scope) values.Time
+	EvalDuration(scope Scope) values.Duration
 	EvalRegexp(scope Scope) *regexp.Regexp
-	EvalTime(scope Scope) Time
-	EvalObject(scope Scope) *Object
+	EvalArray(scope Scope) values.Array
+	EvalObject(scope Scope) values.Object
+	EvalFunction(scope Scope) values.Function
 }
 
 type Func interface {
 	Type() semantic.Type
-	Eval(scope Scope) (Value, error)
-	EvalBool(scope Scope) (bool, error)
+	EvalString(scope Scope) (string, error)
+	Eval(scope Scope) (values.Value, error)
 	EvalInt(scope Scope) (int64, error)
 	EvalUInt(scope Scope) (uint64, error)
 	EvalFloat(scope Scope) (float64, error)
-	EvalString(scope Scope) (string, error)
+	EvalBool(scope Scope) (bool, error)
+	EvalTime(scope Scope) (values.Time, error)
+	EvalDuration(scope Scope) (values.Duration, error)
 	EvalRegexp(scope Scope) (*regexp.Regexp, error)
-	EvalTime(scope Scope) (Time, error)
-	EvalObject(scope Scope) (*Object, error)
+	EvalArray(scope Scope) (values.Array, error)
+	EvalObject(scope Scope) (values.Object, error)
+	EvalFunction(scope Scope) (values.Function, error)
 }
-
-type Time int64
 
 type compiledFn struct {
 	root    Evaluator
@@ -54,37 +59,44 @@ func (c compiledFn) Type() semantic.Type {
 	return c.root.Type()
 }
 
-func (c compiledFn) Eval(scope Scope) (Value, error) {
+func (c compiledFn) Eval(scope Scope) (values.Value, error) {
 	if err := c.validate(scope); err != nil {
 		return nil, err
 	}
-	var val interface{}
 	switch c.Type().Kind() {
-	case semantic.Bool:
-		val = c.root.EvalBool(scope)
-	case semantic.Int:
-		val = c.root.EvalInt(scope)
-	case semantic.UInt:
-		val = c.root.EvalUInt(scope)
-	case semantic.Float:
-		val = c.root.EvalFloat(scope)
 	case semantic.String:
-		val = c.root.EvalString(scope)
-	case semantic.Regexp:
-		val = c.root.EvalRegexp(scope)
+		return values.NewStringValue(c.root.EvalString(scope)), nil
+	case semantic.Int:
+		return values.NewIntValue(c.root.EvalInt(scope)), nil
+	case semantic.UInt:
+		return values.NewUIntValue(c.root.EvalUInt(scope)), nil
+	case semantic.Float:
+		return values.NewFloatValue(c.root.EvalFloat(scope)), nil
+	case semantic.Bool:
+		return values.NewBoolValue(c.root.EvalBool(scope)), nil
 	case semantic.Time:
-		val = c.root.EvalTime(scope)
+		return values.NewTimeValue(c.root.EvalTime(scope)), nil
+	case semantic.Duration:
+		return values.NewDurationValue(c.root.EvalDuration(scope)), nil
+	case semantic.Regexp:
+		return values.NewRegexpValue(c.root.EvalRegexp(scope)), nil
+	case semantic.Array:
+		return c.root.EvalArray(scope), nil
 	case semantic.Object:
-		val = c.root.EvalObject(scope)
+		return c.root.EvalObject(scope), nil
+	case semantic.Function:
+		return c.root.EvalFunction(scope), nil
 	default:
 		return nil, fmt.Errorf("unsupported kind %s", c.Type().Kind())
 	}
-	return value{
-		typ:   c.Type(),
-		Value: val,
-	}, nil
 }
 
+func (c compiledFn) EvalString(scope Scope) (string, error) {
+	if err := c.validate(scope); err != nil {
+		return "", err
+	}
+	return c.root.EvalString(scope), nil
+}
 func (c compiledFn) EvalBool(scope Scope) (bool, error) {
 	if err := c.validate(scope); err != nil {
 		return false, err
@@ -109,11 +121,17 @@ func (c compiledFn) EvalFloat(scope Scope) (float64, error) {
 	}
 	return c.root.EvalFloat(scope), nil
 }
-func (c compiledFn) EvalString(scope Scope) (string, error) {
+func (c compiledFn) EvalTime(scope Scope) (values.Time, error) {
 	if err := c.validate(scope); err != nil {
-		return "", err
+		return 0, err
 	}
-	return c.root.EvalString(scope), nil
+	return c.root.EvalTime(scope), nil
+}
+func (c compiledFn) EvalDuration(scope Scope) (values.Duration, error) {
+	if err := c.validate(scope); err != nil {
+		return 0, err
+	}
+	return c.root.EvalDuration(scope), nil
 }
 func (c compiledFn) EvalRegexp(scope Scope) (*regexp.Regexp, error) {
 	if err := c.validate(scope); err != nil {
@@ -121,117 +139,36 @@ func (c compiledFn) EvalRegexp(scope Scope) (*regexp.Regexp, error) {
 	}
 	return c.root.EvalRegexp(scope), nil
 }
-func (c compiledFn) EvalTime(scope Scope) (Time, error) {
+func (c compiledFn) EvalArray(scope Scope) (values.Array, error) {
 	if err := c.validate(scope); err != nil {
-		return 0, err
+		return nil, err
 	}
-	return c.root.EvalTime(scope), nil
+	return c.root.EvalArray(scope), nil
 }
-func (c compiledFn) EvalObject(scope Scope) (*Object, error) {
+func (c compiledFn) EvalObject(scope Scope) (values.Object, error) {
 	if err := c.validate(scope); err != nil {
 		return nil, err
 	}
 	return c.root.EvalObject(scope), nil
 }
-
-type Value interface {
-	Type() semantic.Type
-	Bool() bool
-	Int() int64
-	UInt() uint64
-	Float() float64
-	Str() string
-	Regexp() *regexp.Regexp
-	Time() Time
-	Object() *Object
+func (c compiledFn) EvalFunction(scope Scope) (values.Function, error) {
+	if err := c.validate(scope); err != nil {
+		return nil, err
+	}
+	return c.root.EvalFunction(scope), nil
 }
 
-type value struct {
-	typ   semantic.Type
-	Value interface{}
-}
-
-func (v value) Type() semantic.Type {
-	return v.typ
-}
-func (v value) Bool() bool {
-	return v.Value.(bool)
-}
-func (v value) Int() int64 {
-	return v.Value.(int64)
-}
-func (v value) UInt() uint64 {
-	return v.Value.(uint64)
-}
-func (v value) Float() float64 {
-	return v.Value.(float64)
-}
-func (v value) Str() string {
-	return v.Value.(string)
-}
-func (v value) Regexp() *regexp.Regexp {
-	return v.Value.(*regexp.Regexp)
-}
-func (v value) Time() Time {
-	return v.Value.(Time)
-}
-func (v value) Object() *Object {
-	return v.Value.(*Object)
-}
-
-func NewBool(v bool) Value {
-	return value{
-		typ:   semantic.Bool,
-		Value: v,
-	}
-}
-func NewUInt(v uint64) Value {
-	return value{
-		typ:   semantic.UInt,
-		Value: v,
-	}
-}
-func NewInt(v int64) Value {
-	return value{
-		typ:   semantic.Int,
-		Value: v,
-	}
-}
-func NewFloat(v float64) Value {
-	return value{
-		typ:   semantic.Float,
-		Value: v,
-	}
-}
-func NewString(v string) Value {
-	return value{
-		typ:   semantic.String,
-		Value: v,
-	}
-}
-func NewRegexp(v *regexp.Regexp) Value {
-	return value{
-		typ:   semantic.Regexp,
-		Value: v,
-	}
-}
-func NewTime(v Time) Value {
-	return value{
-		typ:   semantic.Time,
-		Value: v,
-	}
-}
-
-type Scope map[string]Value
+type Scope map[string]values.Value
 
 func (s Scope) Type(name string) semantic.Type {
 	return s[name].Type()
 }
-func (s Scope) Set(name string, v Value) {
+func (s Scope) Set(name string, v values.Value) {
 	s[name] = v
 }
-func (s Scope) GetBool(name string) bool {
-	return s[name].Bool()
+
+func (s Scope) GetString(name string) string {
+	return s[name].Str()
 }
 func (s Scope) GetInt(name string) int64 {
 	return s[name].Int()
@@ -242,54 +179,69 @@ func (s Scope) GetUInt(name string) uint64 {
 func (s Scope) GetFloat(name string) float64 {
 	return s[name].Float()
 }
-func (s Scope) GetString(name string) string {
-	return s[name].Str()
+func (s Scope) GetBool(name string) bool {
+	return s[name].Bool()
+}
+func (s Scope) GetTime(name string) values.Time {
+	return s[name].Time()
+}
+func (s Scope) GetDuration(name string) values.Duration {
+	return s[name].Duration()
 }
 func (s Scope) GetRegexp(name string) *regexp.Regexp {
 	return s[name].Regexp()
 }
-func (s Scope) GetTime(name string) Time {
-	return s[name].Time()
+func (s Scope) GetArray(name string) values.Array {
+	return s[name].Array()
 }
-func (s Scope) GetObject(name string) *Object {
+func (s Scope) GetObject(name string) values.Object {
 	return s[name].Object()
 }
+func (s Scope) GetFunction(name string) values.Function {
+	return s[name].Function()
+}
 
-func eval(e Evaluator, scope Scope) Value {
+func (s Scope) Copy() Scope {
+	n := make(Scope, len(s))
+	for k, v := range s {
+		n[k] = v
+	}
+	return n
+}
+
+func eval(e Evaluator, scope Scope) values.Value {
 	switch e.Type().Kind() {
-	case semantic.Bool:
-		return NewBool(e.EvalBool(scope))
-	case semantic.Int:
-		return NewInt(e.EvalInt(scope))
-	case semantic.UInt:
-		return NewUInt(e.EvalUInt(scope))
-	case semantic.Float:
-		return NewFloat(e.EvalFloat(scope))
 	case semantic.String:
-		return NewString(e.EvalString(scope))
-	case semantic.Regexp:
-		return NewRegexp(e.EvalRegexp(scope))
+		return values.NewStringValue(e.EvalString(scope))
+	case semantic.Int:
+		return values.NewIntValue(e.EvalInt(scope))
+	case semantic.UInt:
+		return values.NewUIntValue(e.EvalUInt(scope))
+	case semantic.Float:
+		return values.NewFloatValue(e.EvalFloat(scope))
+	case semantic.Bool:
+		return values.NewBoolValue(e.EvalBool(scope))
 	case semantic.Time:
-		return NewTime(e.EvalTime(scope))
+		return values.NewTimeValue(e.EvalTime(scope))
+	case semantic.Duration:
+		return values.NewDurationValue(e.EvalDuration(scope))
+	case semantic.Regexp:
+		return values.NewRegexpValue(e.EvalRegexp(scope))
+	case semantic.Array:
+		return e.EvalArray(scope)
+	case semantic.Object:
+		return e.EvalObject(scope)
+	case semantic.Function:
+		return e.EvalFunction(scope)
 	default:
 		return nil
 	}
 }
 
-func checkKind(act, exp semantic.Kind) {
-	if act != exp {
-		panic(unexpectedKind(act, exp))
-	}
-}
-
-func unexpectedKind(act, exp semantic.Kind) error {
-	return fmt.Errorf("unexpected kind: got %q want %q", act, exp)
-}
-
 type blockEvaluator struct {
 	t     semantic.Type
 	body  []Evaluator
-	value Value
+	value values.Value
 }
 
 func (e *blockEvaluator) Type() semantic.Type {
@@ -302,50 +254,60 @@ func (e *blockEvaluator) eval(scope Scope) {
 	}
 }
 
-func (e *blockEvaluator) EvalBool(scope Scope) bool {
-	checkKind(e.t.Kind(), semantic.Bool)
-	e.eval(scope)
-	return e.value.Bool()
-}
-
-func (e *blockEvaluator) EvalInt(scope Scope) int64 {
-	checkKind(e.t.Kind(), semantic.Int)
-	e.eval(scope)
-	return e.value.Int()
-}
-
-func (e *blockEvaluator) EvalUInt(scope Scope) uint64 {
-	checkKind(e.t.Kind(), semantic.UInt)
-	e.eval(scope)
-	return e.value.UInt()
-}
-
-func (e *blockEvaluator) EvalFloat(scope Scope) float64 {
-	checkKind(e.t.Kind(), semantic.Float)
-	e.eval(scope)
-	return e.value.Float()
-}
-
 func (e *blockEvaluator) EvalString(scope Scope) string {
-	checkKind(e.t.Kind(), semantic.String)
+	values.CheckKind(e.t.Kind(), semantic.String)
 	e.eval(scope)
 	return e.value.Str()
 }
-func (e *blockEvaluator) EvalRegexp(scope Scope) *regexp.Regexp {
-	checkKind(e.t.Kind(), semantic.Regexp)
+func (e *blockEvaluator) EvalInt(scope Scope) int64 {
+	values.CheckKind(e.t.Kind(), semantic.Int)
 	e.eval(scope)
-	return e.value.Regexp()
+	return e.value.Int()
 }
-
-func (e *blockEvaluator) EvalTime(scope Scope) Time {
-	checkKind(e.t.Kind(), semantic.Time)
+func (e *blockEvaluator) EvalUInt(scope Scope) uint64 {
+	values.CheckKind(e.t.Kind(), semantic.UInt)
+	e.eval(scope)
+	return e.value.UInt()
+}
+func (e *blockEvaluator) EvalFloat(scope Scope) float64 {
+	values.CheckKind(e.t.Kind(), semantic.Float)
+	e.eval(scope)
+	return e.value.Float()
+}
+func (e *blockEvaluator) EvalBool(scope Scope) bool {
+	values.CheckKind(e.t.Kind(), semantic.Bool)
+	e.eval(scope)
+	return e.value.Bool()
+}
+func (e *blockEvaluator) EvalTime(scope Scope) values.Time {
+	values.CheckKind(e.t.Kind(), semantic.Time)
 	e.eval(scope)
 	return e.value.Time()
 }
-func (e *blockEvaluator) EvalObject(scope Scope) *Object {
-	checkKind(e.t.Kind(), semantic.Object)
+func (e *blockEvaluator) EvalDuration(scope Scope) values.Duration {
+	values.CheckKind(e.t.Kind(), semantic.Duration)
+	e.eval(scope)
+	return e.value.Duration()
+}
+func (e *blockEvaluator) EvalRegexp(scope Scope) *regexp.Regexp {
+	values.CheckKind(e.t.Kind(), semantic.Regexp)
+	e.eval(scope)
+	return e.value.Regexp()
+}
+func (e *blockEvaluator) EvalArray(scope Scope) values.Array {
+	values.CheckKind(e.t.Kind(), semantic.Object)
+	e.eval(scope)
+	return e.value.Array()
+}
+func (e *blockEvaluator) EvalObject(scope Scope) values.Object {
+	values.CheckKind(e.t.Kind(), semantic.Object)
 	e.eval(scope)
 	return e.value.Object()
+}
+func (e *blockEvaluator) EvalFunction(scope Scope) values.Function {
+	values.CheckKind(e.t.Kind(), semantic.Object)
+	e.eval(scope)
+	return e.value.Function()
 }
 
 type returnEvaluator struct {
@@ -366,150 +328,97 @@ func (e *declarationEvaluator) eval(scope Scope) {
 	scope.Set(e.id, eval(e.init, scope))
 }
 
-func (e *declarationEvaluator) EvalBool(scope Scope) bool {
+func (e *declarationEvaluator) EvalString(scope Scope) string {
 	e.eval(scope)
-	return scope.GetBool(e.id)
+	return scope.GetString(e.id)
 }
-
 func (e *declarationEvaluator) EvalInt(scope Scope) int64 {
 	e.eval(scope)
 	return scope.GetInt(e.id)
 }
-
 func (e *declarationEvaluator) EvalUInt(scope Scope) uint64 {
 	e.eval(scope)
 	return scope.GetUInt(e.id)
 }
-
 func (e *declarationEvaluator) EvalFloat(scope Scope) float64 {
 	e.eval(scope)
 	return scope.GetFloat(e.id)
 }
-
-func (e *declarationEvaluator) EvalString(scope Scope) string {
+func (e *declarationEvaluator) EvalBool(scope Scope) bool {
 	e.eval(scope)
-	return scope.GetString(e.id)
+	return scope.GetBool(e.id)
+}
+func (e *declarationEvaluator) EvalTime(scope Scope) values.Time {
+	e.eval(scope)
+	return scope.GetTime(e.id)
+}
+func (e *declarationEvaluator) EvalDuration(scope Scope) values.Duration {
+	e.eval(scope)
+	return scope.GetDuration(e.id)
 }
 func (e *declarationEvaluator) EvalRegexp(scope Scope) *regexp.Regexp {
 	e.eval(scope)
 	return scope.GetRegexp(e.id)
 }
-
-func (e *declarationEvaluator) EvalTime(scope Scope) Time {
+func (e *declarationEvaluator) EvalArray(scope Scope) values.Array {
 	e.eval(scope)
-	return scope.GetTime(e.id)
+	return scope.GetArray(e.id)
 }
-
-func (e *declarationEvaluator) EvalObject(scope Scope) *Object {
+func (e *declarationEvaluator) EvalObject(scope Scope) values.Object {
 	e.eval(scope)
 	return scope.GetObject(e.id)
 }
+func (e *declarationEvaluator) EvalFunction(scope Scope) values.Function {
+	e.eval(scope)
+	return scope.GetFunction(e.id)
+}
 
-type mapEvaluator struct {
+type objEvaluator struct {
 	t          semantic.Type
 	properties map[string]Evaluator
 }
 
-func (e *mapEvaluator) Type() semantic.Type {
+func (e *objEvaluator) Type() semantic.Type {
 	return e.t
 }
 
-func (e *mapEvaluator) EvalBool(scope Scope) bool {
-	panic(unexpectedKind(e.t.Kind(), semantic.Bool))
+func (e *objEvaluator) EvalString(scope Scope) string {
+	panic(values.UnexpectedKind(e.t.Kind(), semantic.String))
 }
-
-func (e *mapEvaluator) EvalInt(scope Scope) int64 {
-	panic(unexpectedKind(e.t.Kind(), semantic.Int))
+func (e *objEvaluator) EvalInt(scope Scope) int64 {
+	panic(values.UnexpectedKind(e.t.Kind(), semantic.Int))
 }
-
-func (e *mapEvaluator) EvalUInt(scope Scope) uint64 {
-	panic(unexpectedKind(e.t.Kind(), semantic.UInt))
+func (e *objEvaluator) EvalUInt(scope Scope) uint64 {
+	panic(values.UnexpectedKind(e.t.Kind(), semantic.UInt))
 }
-
-func (e *mapEvaluator) EvalFloat(scope Scope) float64 {
-	panic(unexpectedKind(e.t.Kind(), semantic.Float))
+func (e *objEvaluator) EvalFloat(scope Scope) float64 {
+	panic(values.UnexpectedKind(e.t.Kind(), semantic.Float))
 }
-
-func (e *mapEvaluator) EvalString(scope Scope) string {
-	panic(unexpectedKind(e.t.Kind(), semantic.String))
+func (e *objEvaluator) EvalBool(scope Scope) bool {
+	panic(values.UnexpectedKind(e.t.Kind(), semantic.Bool))
 }
-func (e *mapEvaluator) EvalRegexp(scope Scope) *regexp.Regexp {
-	panic(unexpectedKind(e.t.Kind(), semantic.Regexp))
+func (e *objEvaluator) EvalTime(scope Scope) values.Time {
+	panic(values.UnexpectedKind(e.t.Kind(), semantic.Time))
 }
-
-func (e *mapEvaluator) EvalTime(scope Scope) Time {
-	panic(unexpectedKind(e.t.Kind(), semantic.Time))
+func (e *objEvaluator) EvalDuration(scope Scope) values.Duration {
+	panic(values.UnexpectedKind(e.t.Kind(), semantic.Duration))
 }
-func (e *mapEvaluator) EvalObject(scope Scope) *Object {
-	obj := NewObject()
+func (e *objEvaluator) EvalRegexp(scope Scope) *regexp.Regexp {
+	panic(values.UnexpectedKind(e.t.Kind(), semantic.Regexp))
+}
+func (e *objEvaluator) EvalArray(scope Scope) values.Array {
+	panic(values.UnexpectedKind(e.t.Kind(), semantic.Array))
+}
+func (e *objEvaluator) EvalObject(scope Scope) values.Object {
+	obj := values.NewObject()
 	for k, node := range e.properties {
 		v := eval(node, scope)
 		obj.Set(k, v)
 	}
 	return obj
 }
-
-type Object struct {
-	values        map[string]Value
-	propertyTypes map[string]semantic.Type
-	typ           semantic.Type
-}
-
-func NewObject() *Object {
-	return &Object{
-		values:        make(map[string]Value),
-		propertyTypes: make(map[string]semantic.Type),
-	}
-}
-
-func (o *Object) Set(name string, v Value) {
-	o.values[name] = v
-	if o.propertyTypes[name] != v.Type() {
-		o.SetPropertyType(name, v.Type())
-	}
-}
-func (o *Object) Get(name string) Value {
-	return o.values[name]
-}
-func (o *Object) SetPropertyType(name string, t semantic.Type) {
-	o.propertyTypes[name] = t
-	o.typ = nil
-}
-func (o *Object) Type() semantic.Type {
-	if o.typ == nil {
-		o.typ = semantic.NewObjectType(o.propertyTypes)
-	}
-	return o.typ
-}
-func (o *Object) Bool() bool {
-	panic("map is not a boolean")
-}
-
-func (o *Object) Int() int64 {
-	panic("map is not a int")
-}
-
-func (o *Object) UInt() uint64 {
-	panic("map is not a uint")
-}
-
-func (o *Object) Float() float64 {
-	panic("map is not a float")
-}
-
-func (o *Object) Str() string {
-	panic("map is not a string")
-}
-func (o *Object) Regexp() *regexp.Regexp {
-	panic("map is not a regular expression")
-}
-
-func (o *Object) Time() Time {
-	panic("map is not a time")
-}
-
-func (o *Object) Object() *Object {
-	return o
+func (e *objEvaluator) EvalFunction(scope Scope) values.Function {
+	panic(values.UnexpectedKind(e.t.Kind(), semantic.Function))
 }
 
 type logicalEvaluator struct {
@@ -522,6 +431,18 @@ func (e *logicalEvaluator) Type() semantic.Type {
 	return e.t
 }
 
+func (e *logicalEvaluator) EvalString(scope Scope) string {
+	panic(values.UnexpectedKind(e.t.Kind(), semantic.String))
+}
+func (e *logicalEvaluator) EvalInt(scope Scope) int64 {
+	panic(values.UnexpectedKind(e.t.Kind(), semantic.Int))
+}
+func (e *logicalEvaluator) EvalUInt(scope Scope) uint64 {
+	panic(values.UnexpectedKind(e.t.Kind(), semantic.UInt))
+}
+func (e *logicalEvaluator) EvalFloat(scope Scope) float64 {
+	panic(values.UnexpectedKind(e.t.Kind(), semantic.Float))
+}
 func (e *logicalEvaluator) EvalBool(scope Scope) bool {
 	switch e.operator {
 	case ast.AndOperator:
@@ -532,34 +453,26 @@ func (e *logicalEvaluator) EvalBool(scope Scope) bool {
 		panic(fmt.Errorf("unknown logical operator %v", e.operator))
 	}
 }
-
-func (e *logicalEvaluator) EvalInt(scope Scope) int64 {
-	panic(unexpectedKind(e.t.Kind(), semantic.Int))
+func (e *logicalEvaluator) EvalTime(scope Scope) values.Time {
+	panic(values.UnexpectedKind(e.t.Kind(), semantic.Time))
 }
-
-func (e *logicalEvaluator) EvalUInt(scope Scope) uint64 {
-	panic(unexpectedKind(e.t.Kind(), semantic.UInt))
-}
-
-func (e *logicalEvaluator) EvalFloat(scope Scope) float64 {
-	panic(unexpectedKind(e.t.Kind(), semantic.Float))
-}
-
-func (e *logicalEvaluator) EvalString(scope Scope) string {
-	panic(unexpectedKind(e.t.Kind(), semantic.String))
+func (e *logicalEvaluator) EvalDuration(scope Scope) values.Duration {
+	panic(values.UnexpectedKind(e.t.Kind(), semantic.Duration))
 }
 func (e *logicalEvaluator) EvalRegexp(scope Scope) *regexp.Regexp {
-	panic(unexpectedKind(e.t.Kind(), semantic.Regexp))
+	panic(values.UnexpectedKind(e.t.Kind(), semantic.Regexp))
+}
+func (e *logicalEvaluator) EvalArray(scope Scope) values.Array {
+	panic(values.UnexpectedKind(e.t.Kind(), semantic.Array))
+}
+func (e *logicalEvaluator) EvalObject(scope Scope) values.Object {
+	panic(values.UnexpectedKind(e.t.Kind(), semantic.Object))
+}
+func (e *logicalEvaluator) EvalFunction(scope Scope) values.Function {
+	panic(values.UnexpectedKind(e.t.Kind(), semantic.Function))
 }
 
-func (e *logicalEvaluator) EvalTime(scope Scope) Time {
-	panic(unexpectedKind(e.t.Kind(), semantic.Time))
-}
-func (e *logicalEvaluator) EvalObject(scope Scope) *Object {
-	panic(unexpectedKind(e.t.Kind(), semantic.Object))
-}
-
-type binaryFunc func(scope Scope, left, right Evaluator) Value
+type binaryFunc func(scope Scope, left, right Evaluator) values.Value
 
 type binarySignature struct {
 	Operator    ast.OperatorKind
@@ -569,42 +482,49 @@ type binarySignature struct {
 type binaryEvaluator struct {
 	t           semantic.Type
 	left, right Evaluator
-	f           binaryFunc
+	f           values.BinaryFunction
 }
 
 func (e *binaryEvaluator) Type() semantic.Type {
 	return e.t
 }
 
-func (e *binaryEvaluator) EvalBool(scope Scope) bool {
-	return e.f(scope, e.left, e.right).Bool()
-}
-
-func (e *binaryEvaluator) EvalInt(scope Scope) int64 {
-	return e.f(scope, e.left, e.right).Int()
-}
-
-func (e *binaryEvaluator) EvalUInt(scope Scope) uint64 {
-	return e.f(scope, e.left, e.right).UInt()
-}
-
-func (e *binaryEvaluator) EvalFloat(scope Scope) float64 {
-	return e.f(scope, e.left, e.right).Float()
+func (e *binaryEvaluator) eval(scope Scope) (l, r values.Value) {
+	return eval(e.left, scope), eval(e.right, scope)
 }
 
 func (e *binaryEvaluator) EvalString(scope Scope) string {
-	return e.f(scope, e.left, e.right).Str()
+	return e.f(e.eval(scope)).Str()
 }
-
+func (e *binaryEvaluator) EvalInt(scope Scope) int64 {
+	return e.f(e.eval(scope)).Int()
+}
+func (e *binaryEvaluator) EvalUInt(scope Scope) uint64 {
+	return e.f(e.eval(scope)).UInt()
+}
+func (e *binaryEvaluator) EvalFloat(scope Scope) float64 {
+	return e.f(e.eval(scope)).Float()
+}
+func (e *binaryEvaluator) EvalBool(scope Scope) bool {
+	return e.f(e.eval(scope)).Bool()
+}
+func (e *binaryEvaluator) EvalTime(scope Scope) values.Time {
+	return e.f(e.eval(scope)).Time()
+}
+func (e *binaryEvaluator) EvalDuration(scope Scope) values.Duration {
+	return e.f(e.eval(scope)).Duration()
+}
 func (e *binaryEvaluator) EvalRegexp(scope Scope) *regexp.Regexp {
-	panic(unexpectedKind(e.t.Kind(), semantic.Regexp))
+	panic(values.UnexpectedKind(e.t.Kind(), semantic.Regexp))
 }
-
-func (e *binaryEvaluator) EvalTime(scope Scope) Time {
-	return e.f(scope, e.left, e.right).Time()
+func (e *binaryEvaluator) EvalArray(scope Scope) values.Array {
+	panic(values.UnexpectedKind(e.t.Kind(), semantic.Array))
 }
-func (e *binaryEvaluator) EvalObject(scope Scope) *Object {
-	panic(unexpectedKind(e.t.Kind(), semantic.Object))
+func (e *binaryEvaluator) EvalObject(scope Scope) values.Object {
+	panic(values.UnexpectedKind(e.t.Kind(), semantic.Object))
+}
+func (e *binaryEvaluator) EvalFunction(scope Scope) values.Function {
+	panic(values.UnexpectedKind(e.t.Kind(), semantic.Function))
 }
 
 type unaryEvaluator struct {
@@ -616,37 +536,42 @@ func (e *unaryEvaluator) Type() semantic.Type {
 	return e.t
 }
 
-func (e *unaryEvaluator) EvalBool(scope Scope) bool {
-	// There is only one boolean unary operator
-	return !e.node.EvalBool(scope)
+func (e *unaryEvaluator) EvalString(scope Scope) string {
+	panic(values.UnexpectedKind(e.t.Kind(), semantic.String))
 }
-
 func (e *unaryEvaluator) EvalInt(scope Scope) int64 {
 	// There is only one integer unary operator
 	return -e.node.EvalInt(scope)
 }
-
 func (e *unaryEvaluator) EvalUInt(scope Scope) uint64 {
-	panic(unexpectedKind(e.t.Kind(), semantic.UInt))
+	panic(values.UnexpectedKind(e.t.Kind(), semantic.UInt))
 }
-
 func (e *unaryEvaluator) EvalFloat(scope Scope) float64 {
 	// There is only one float unary operator
 	return -e.node.EvalFloat(scope)
 }
-
-func (e *unaryEvaluator) EvalString(scope Scope) string {
-	panic(unexpectedKind(e.t.Kind(), semantic.String))
+func (e *unaryEvaluator) EvalBool(scope Scope) bool {
+	// There is only one boolean unary operator
+	return !e.node.EvalBool(scope)
+}
+func (e *unaryEvaluator) EvalTime(scope Scope) values.Time {
+	panic(values.UnexpectedKind(e.t.Kind(), semantic.Time))
+}
+func (e *unaryEvaluator) EvalDuration(scope Scope) values.Duration {
+	// There is only one duration unary operator
+	return -e.node.EvalDuration(scope)
 }
 func (e *unaryEvaluator) EvalRegexp(scope Scope) *regexp.Regexp {
-	panic(unexpectedKind(e.t.Kind(), semantic.Regexp))
+	panic(values.UnexpectedKind(e.t.Kind(), semantic.Regexp))
 }
-
-func (e *unaryEvaluator) EvalTime(scope Scope) Time {
-	panic(unexpectedKind(e.t.Kind(), semantic.Time))
+func (e *unaryEvaluator) EvalArray(scope Scope) values.Array {
+	panic(values.UnexpectedKind(e.t.Kind(), semantic.Array))
 }
-func (e *unaryEvaluator) EvalObject(scope Scope) *Object {
-	panic(unexpectedKind(e.t.Kind(), semantic.Object))
+func (e *unaryEvaluator) EvalObject(scope Scope) values.Object {
+	panic(values.UnexpectedKind(e.t.Kind(), semantic.Object))
+}
+func (e *unaryEvaluator) EvalFunction(scope Scope) values.Function {
+	panic(values.UnexpectedKind(e.t.Kind(), semantic.Function))
 }
 
 type integerEvaluator struct {
@@ -658,35 +583,38 @@ func (e *integerEvaluator) Type() semantic.Type {
 	return e.t
 }
 
-func (e *integerEvaluator) EvalBool(scope Scope) bool {
-	panic(unexpectedKind(e.t.Kind(), semantic.Bool))
+func (e *integerEvaluator) EvalString(scope Scope) string {
+	panic(values.UnexpectedKind(e.t.Kind(), semantic.String))
 }
-
 func (e *integerEvaluator) EvalInt(scope Scope) int64 {
 	return e.i
 }
-
 func (e *integerEvaluator) EvalUInt(scope Scope) uint64 {
 	return uint64(e.i)
 }
-
 func (e *integerEvaluator) EvalFloat(scope Scope) float64 {
-	panic(unexpectedKind(e.t.Kind(), semantic.Float))
+	panic(values.UnexpectedKind(e.t.Kind(), semantic.Float))
 }
-
-func (e *integerEvaluator) EvalString(scope Scope) string {
-	panic(unexpectedKind(e.t.Kind(), semantic.String))
+func (e *integerEvaluator) EvalBool(scope Scope) bool {
+	panic(values.UnexpectedKind(e.t.Kind(), semantic.Bool))
 }
-
+func (e *integerEvaluator) EvalTime(scope Scope) values.Time {
+	panic(values.UnexpectedKind(e.t.Kind(), semantic.Time))
+}
+func (e *integerEvaluator) EvalDuration(scope Scope) values.Duration {
+	panic(values.UnexpectedKind(e.t.Kind(), semantic.Duration))
+}
 func (e *integerEvaluator) EvalRegexp(scope Scope) *regexp.Regexp {
-	panic(unexpectedKind(e.t.Kind(), semantic.Regexp))
+	panic(values.UnexpectedKind(e.t.Kind(), semantic.Regexp))
 }
-
-func (e *integerEvaluator) EvalTime(scope Scope) Time {
-	panic(unexpectedKind(e.t.Kind(), semantic.Time))
+func (e *integerEvaluator) EvalArray(scope Scope) values.Array {
+	panic(values.UnexpectedKind(e.t.Kind(), semantic.Array))
 }
-func (e *integerEvaluator) EvalObject(scope Scope) *Object {
-	panic(unexpectedKind(e.t.Kind(), semantic.Object))
+func (e *integerEvaluator) EvalObject(scope Scope) values.Object {
+	panic(values.UnexpectedKind(e.t.Kind(), semantic.Object))
+}
+func (e *integerEvaluator) EvalFunction(scope Scope) values.Function {
+	panic(values.UnexpectedKind(e.t.Kind(), semantic.Function))
 }
 
 type stringEvaluator struct {
@@ -698,34 +626,38 @@ func (e *stringEvaluator) Type() semantic.Type {
 	return e.t
 }
 
-func (e *stringEvaluator) EvalBool(scope Scope) bool {
-	panic(unexpectedKind(e.t.Kind(), semantic.Bool))
-}
-
-func (e *stringEvaluator) EvalInt(scope Scope) int64 {
-	panic(unexpectedKind(e.t.Kind(), semantic.Int))
-}
-
-func (e *stringEvaluator) EvalUInt(scope Scope) uint64 {
-	panic(unexpectedKind(e.t.Kind(), semantic.UInt))
-}
-
-func (e *stringEvaluator) EvalFloat(scope Scope) float64 {
-	panic(unexpectedKind(e.t.Kind(), semantic.Float))
-}
-
 func (e *stringEvaluator) EvalString(scope Scope) string {
 	return e.s
 }
+func (e *stringEvaluator) EvalInt(scope Scope) int64 {
+	panic(values.UnexpectedKind(e.t.Kind(), semantic.Int))
+}
+func (e *stringEvaluator) EvalUInt(scope Scope) uint64 {
+	panic(values.UnexpectedKind(e.t.Kind(), semantic.UInt))
+}
+func (e *stringEvaluator) EvalFloat(scope Scope) float64 {
+	panic(values.UnexpectedKind(e.t.Kind(), semantic.Float))
+}
+func (e *stringEvaluator) EvalBool(scope Scope) bool {
+	panic(values.UnexpectedKind(e.t.Kind(), semantic.Bool))
+}
+func (e *stringEvaluator) EvalTime(scope Scope) values.Time {
+	panic(values.UnexpectedKind(e.t.Kind(), semantic.Time))
+}
+func (e *stringEvaluator) EvalDuration(scope Scope) values.Duration {
+	panic(values.UnexpectedKind(e.t.Kind(), semantic.Duration))
+}
 func (e *stringEvaluator) EvalRegexp(scope Scope) *regexp.Regexp {
-	panic(unexpectedKind(e.t.Kind(), semantic.Regexp))
+	panic(values.UnexpectedKind(e.t.Kind(), semantic.Regexp))
 }
-
-func (e *stringEvaluator) EvalTime(scope Scope) Time {
-	panic(unexpectedKind(e.t.Kind(), semantic.Time))
+func (e *stringEvaluator) EvalArray(scope Scope) values.Array {
+	panic(values.UnexpectedKind(e.t.Kind(), semantic.Array))
 }
-func (e *stringEvaluator) EvalObject(scope Scope) *Object {
-	panic(unexpectedKind(e.t.Kind(), semantic.Object))
+func (e *stringEvaluator) EvalObject(scope Scope) values.Object {
+	panic(values.UnexpectedKind(e.t.Kind(), semantic.Object))
+}
+func (e *stringEvaluator) EvalFunction(scope Scope) values.Function {
+	panic(values.UnexpectedKind(e.t.Kind(), semantic.Function))
 }
 
 type regexpEvaluator struct {
@@ -737,36 +669,38 @@ func (e *regexpEvaluator) Type() semantic.Type {
 	return e.t
 }
 
-func (e *regexpEvaluator) EvalBool(scope Scope) bool {
-	panic(unexpectedKind(e.t.Kind(), semantic.Bool))
-}
-
-func (e *regexpEvaluator) EvalInt(scope Scope) int64 {
-	panic(unexpectedKind(e.t.Kind(), semantic.Int))
-}
-
-func (e *regexpEvaluator) EvalUInt(scope Scope) uint64 {
-	panic(unexpectedKind(e.t.Kind(), semantic.UInt))
-}
-
-func (e *regexpEvaluator) EvalFloat(scope Scope) float64 {
-	panic(unexpectedKind(e.t.Kind(), semantic.Float))
-}
-
 func (e *regexpEvaluator) EvalString(scope Scope) string {
-	panic(unexpectedKind(e.t.Kind(), semantic.String))
+	panic(values.UnexpectedKind(e.t.Kind(), semantic.String))
 }
-
+func (e *regexpEvaluator) EvalInt(scope Scope) int64 {
+	panic(values.UnexpectedKind(e.t.Kind(), semantic.Int))
+}
+func (e *regexpEvaluator) EvalUInt(scope Scope) uint64 {
+	panic(values.UnexpectedKind(e.t.Kind(), semantic.UInt))
+}
+func (e *regexpEvaluator) EvalFloat(scope Scope) float64 {
+	panic(values.UnexpectedKind(e.t.Kind(), semantic.Float))
+}
+func (e *regexpEvaluator) EvalBool(scope Scope) bool {
+	panic(values.UnexpectedKind(e.t.Kind(), semantic.Bool))
+}
+func (e *regexpEvaluator) EvalTime(scope Scope) values.Time {
+	panic(values.UnexpectedKind(e.t.Kind(), semantic.Time))
+}
+func (e *regexpEvaluator) EvalDuration(scope Scope) values.Duration {
+	panic(values.UnexpectedKind(e.t.Kind(), semantic.Duration))
+}
 func (e *regexpEvaluator) EvalRegexp(scope Scope) *regexp.Regexp {
 	return e.r
 }
-
-func (e *regexpEvaluator) EvalTime(scope Scope) Time {
-	panic(unexpectedKind(e.t.Kind(), semantic.Time))
+func (e *regexpEvaluator) EvalArray(scope Scope) values.Array {
+	panic(values.UnexpectedKind(e.t.Kind(), semantic.Array))
 }
-
-func (e *regexpEvaluator) EvalObject(scope Scope) *Object {
-	panic(unexpectedKind(e.t.Kind(), semantic.Object))
+func (e *regexpEvaluator) EvalObject(scope Scope) values.Object {
+	panic(values.UnexpectedKind(e.t.Kind(), semantic.Object))
+}
+func (e *regexpEvaluator) EvalFunction(scope Scope) values.Function {
+	panic(values.UnexpectedKind(e.t.Kind(), semantic.Function))
 }
 
 type booleanEvaluator struct {
@@ -778,35 +712,38 @@ func (e *booleanEvaluator) Type() semantic.Type {
 	return e.t
 }
 
+func (e *booleanEvaluator) EvalString(scope Scope) string {
+	panic(values.UnexpectedKind(e.t.Kind(), semantic.String))
+}
+func (e *booleanEvaluator) EvalInt(scope Scope) int64 {
+	panic(values.UnexpectedKind(e.t.Kind(), semantic.Int))
+}
+func (e *booleanEvaluator) EvalUInt(scope Scope) uint64 {
+	panic(values.UnexpectedKind(e.t.Kind(), semantic.UInt))
+}
+func (e *booleanEvaluator) EvalFloat(scope Scope) float64 {
+	panic(values.UnexpectedKind(e.t.Kind(), semantic.Float))
+}
 func (e *booleanEvaluator) EvalBool(scope Scope) bool {
 	return e.b
 }
-
-func (e *booleanEvaluator) EvalInt(scope Scope) int64 {
-	panic(unexpectedKind(e.t.Kind(), semantic.Int))
+func (e *booleanEvaluator) EvalTime(scope Scope) values.Time {
+	panic(values.UnexpectedKind(e.t.Kind(), semantic.Time))
 }
-
-func (e *booleanEvaluator) EvalUInt(scope Scope) uint64 {
-	panic(unexpectedKind(e.t.Kind(), semantic.UInt))
+func (e *booleanEvaluator) EvalDuration(scope Scope) values.Duration {
+	panic(values.UnexpectedKind(e.t.Kind(), semantic.Duration))
 }
-
-func (e *booleanEvaluator) EvalFloat(scope Scope) float64 {
-	panic(unexpectedKind(e.t.Kind(), semantic.Float))
-}
-
-func (e *booleanEvaluator) EvalString(scope Scope) string {
-	panic(unexpectedKind(e.t.Kind(), semantic.String))
-}
-
 func (e *booleanEvaluator) EvalRegexp(scope Scope) *regexp.Regexp {
-	panic(unexpectedKind(e.t.Kind(), semantic.Regexp))
+	panic(values.UnexpectedKind(e.t.Kind(), semantic.Regexp))
 }
-
-func (e *booleanEvaluator) EvalTime(scope Scope) Time {
-	panic(unexpectedKind(e.t.Kind(), semantic.Time))
+func (e *booleanEvaluator) EvalArray(scope Scope) values.Array {
+	panic(values.UnexpectedKind(e.t.Kind(), semantic.Array))
 }
-func (e *booleanEvaluator) EvalObject(scope Scope) *Object {
-	panic(unexpectedKind(e.t.Kind(), semantic.Object))
+func (e *booleanEvaluator) EvalObject(scope Scope) values.Object {
+	panic(values.UnexpectedKind(e.t.Kind(), semantic.Object))
+}
+func (e *booleanEvaluator) EvalFunction(scope Scope) values.Function {
+	panic(values.UnexpectedKind(e.t.Kind(), semantic.Function))
 }
 
 type floatEvaluator struct {
@@ -818,75 +755,81 @@ func (e *floatEvaluator) Type() semantic.Type {
 	return e.t
 }
 
-func (e *floatEvaluator) EvalBool(scope Scope) bool {
-	panic(unexpectedKind(e.t.Kind(), semantic.Bool))
+func (e *floatEvaluator) EvalString(scope Scope) string {
+	panic(values.UnexpectedKind(e.t.Kind(), semantic.String))
 }
-
 func (e *floatEvaluator) EvalInt(scope Scope) int64 {
-	panic(unexpectedKind(e.t.Kind(), semantic.Int))
+	panic(values.UnexpectedKind(e.t.Kind(), semantic.Int))
 }
-
 func (e *floatEvaluator) EvalUInt(scope Scope) uint64 {
-	panic(unexpectedKind(e.t.Kind(), semantic.UInt))
+	panic(values.UnexpectedKind(e.t.Kind(), semantic.UInt))
 }
-
 func (e *floatEvaluator) EvalFloat(scope Scope) float64 {
 	return e.f
 }
-
-func (e *floatEvaluator) EvalString(scope Scope) string {
-	panic(unexpectedKind(e.t.Kind(), semantic.String))
+func (e *floatEvaluator) EvalBool(scope Scope) bool {
+	panic(values.UnexpectedKind(e.t.Kind(), semantic.Bool))
 }
-
+func (e *floatEvaluator) EvalTime(scope Scope) values.Time {
+	panic(values.UnexpectedKind(e.t.Kind(), semantic.Time))
+}
+func (e *floatEvaluator) EvalDuration(scope Scope) values.Duration {
+	panic(values.UnexpectedKind(e.t.Kind(), semantic.Duration))
+}
 func (e *floatEvaluator) EvalRegexp(scope Scope) *regexp.Regexp {
-	panic(unexpectedKind(e.t.Kind(), semantic.Regexp))
+	panic(values.UnexpectedKind(e.t.Kind(), semantic.Regexp))
 }
-
-func (e *floatEvaluator) EvalTime(scope Scope) Time {
-	panic(unexpectedKind(e.t.Kind(), semantic.Time))
+func (e *floatEvaluator) EvalArray(scope Scope) values.Array {
+	panic(values.UnexpectedKind(e.t.Kind(), semantic.Array))
 }
-func (e *floatEvaluator) EvalObject(scope Scope) *Object {
-	panic(unexpectedKind(e.t.Kind(), semantic.Object))
+func (e *floatEvaluator) EvalObject(scope Scope) values.Object {
+	panic(values.UnexpectedKind(e.t.Kind(), semantic.Object))
+}
+func (e *floatEvaluator) EvalFunction(scope Scope) values.Function {
+	panic(values.UnexpectedKind(e.t.Kind(), semantic.Function))
 }
 
 type timeEvaluator struct {
 	t    semantic.Type
-	time Time
+	time values.Time
 }
 
 func (e *timeEvaluator) Type() semantic.Type {
 	return e.t
 }
 
-func (e *timeEvaluator) EvalBool(scope Scope) bool {
-	panic(unexpectedKind(e.t.Kind(), semantic.Bool))
-}
-
-func (e *timeEvaluator) EvalInt(scope Scope) int64 {
-	panic(unexpectedKind(e.t.Kind(), semantic.Int))
-}
-
-func (e *timeEvaluator) EvalUInt(scope Scope) uint64 {
-	panic(unexpectedKind(e.t.Kind(), semantic.UInt))
-}
-
-func (e *timeEvaluator) EvalFloat(scope Scope) float64 {
-	panic(unexpectedKind(e.t.Kind(), semantic.Float))
-}
-
 func (e *timeEvaluator) EvalString(scope Scope) string {
-	panic(unexpectedKind(e.t.Kind(), semantic.String))
+	panic(values.UnexpectedKind(e.t.Kind(), semantic.String))
 }
-
-func (e *timeEvaluator) EvalRegexp(scope Scope) *regexp.Regexp {
-	panic(unexpectedKind(e.t.Kind(), semantic.Regexp))
+func (e *timeEvaluator) EvalInt(scope Scope) int64 {
+	panic(values.UnexpectedKind(e.t.Kind(), semantic.Int))
 }
-
-func (e *timeEvaluator) EvalTime(scope Scope) Time {
+func (e *timeEvaluator) EvalUInt(scope Scope) uint64 {
+	panic(values.UnexpectedKind(e.t.Kind(), semantic.UInt))
+}
+func (e *timeEvaluator) EvalFloat(scope Scope) float64 {
+	panic(values.UnexpectedKind(e.t.Kind(), semantic.Float))
+}
+func (e *timeEvaluator) EvalBool(scope Scope) bool {
+	panic(values.UnexpectedKind(e.t.Kind(), semantic.Bool))
+}
+func (e *timeEvaluator) EvalTime(scope Scope) values.Time {
 	return e.time
 }
-func (e *timeEvaluator) EvalObject(scope Scope) *Object {
-	panic(unexpectedKind(e.t.Kind(), semantic.Object))
+func (e *timeEvaluator) EvalDuration(scope Scope) values.Duration {
+	panic(values.UnexpectedKind(e.t.Kind(), semantic.Duration))
+}
+func (e *timeEvaluator) EvalRegexp(scope Scope) *regexp.Regexp {
+	panic(values.UnexpectedKind(e.t.Kind(), semantic.Regexp))
+}
+func (e *timeEvaluator) EvalArray(scope Scope) values.Array {
+	panic(values.UnexpectedKind(e.t.Kind(), semantic.Array))
+}
+func (e *timeEvaluator) EvalObject(scope Scope) values.Object {
+	panic(values.UnexpectedKind(e.t.Kind(), semantic.Object))
+}
+func (e *timeEvaluator) EvalFunction(scope Scope) values.Function {
+	panic(values.UnexpectedKind(e.t.Kind(), semantic.Function))
 }
 
 type identifierEvaluator struct {
@@ -898,35 +841,80 @@ func (e *identifierEvaluator) Type() semantic.Type {
 	return e.t
 }
 
-func (e *identifierEvaluator) EvalBool(scope Scope) bool {
-	return scope.GetBool(e.name)
-}
-
-func (e *identifierEvaluator) EvalInt(scope Scope) int64 {
-	return scope.GetInt(e.name)
-}
-
-func (e *identifierEvaluator) EvalUInt(scope Scope) uint64 {
-	return scope.GetUInt(e.name)
-}
-
-func (e *identifierEvaluator) EvalFloat(scope Scope) float64 {
-	return scope.GetFloat(e.name)
-}
-
 func (e *identifierEvaluator) EvalString(scope Scope) string {
 	return scope.GetString(e.name)
 }
-
+func (e *identifierEvaluator) EvalInt(scope Scope) int64 {
+	return scope.GetInt(e.name)
+}
+func (e *identifierEvaluator) EvalUInt(scope Scope) uint64 {
+	return scope.GetUInt(e.name)
+}
+func (e *identifierEvaluator) EvalFloat(scope Scope) float64 {
+	return scope.GetFloat(e.name)
+}
+func (e *identifierEvaluator) EvalBool(scope Scope) bool {
+	return scope.GetBool(e.name)
+}
+func (e *identifierEvaluator) EvalTime(scope Scope) values.Time {
+	return scope.GetTime(e.name)
+}
+func (e *identifierEvaluator) EvalDuration(scope Scope) values.Duration {
+	return scope.GetDuration(e.name)
+}
 func (e *identifierEvaluator) EvalRegexp(scope Scope) *regexp.Regexp {
 	return scope.GetRegexp(e.name)
 }
-
-func (e *identifierEvaluator) EvalTime(scope Scope) Time {
-	return scope.GetTime(e.name)
+func (e *identifierEvaluator) EvalArray(scope Scope) values.Array {
+	return scope.GetArray(e.name)
 }
-func (e *identifierEvaluator) EvalObject(scope Scope) *Object {
+func (e *identifierEvaluator) EvalObject(scope Scope) values.Object {
 	return scope.GetObject(e.name)
+}
+func (e *identifierEvaluator) EvalFunction(scope Scope) values.Function {
+	return scope.GetFunction(e.name)
+}
+
+type valueEvaluator struct {
+	value values.Value
+}
+
+func (e *valueEvaluator) Type() semantic.Type {
+	return e.value.Type()
+}
+
+func (e *valueEvaluator) EvalString(scope Scope) string {
+	return e.value.Str()
+}
+func (e *valueEvaluator) EvalInt(scope Scope) int64 {
+	return e.value.Int()
+}
+func (e *valueEvaluator) EvalUInt(scope Scope) uint64 {
+	return e.value.UInt()
+}
+func (e *valueEvaluator) EvalFloat(scope Scope) float64 {
+	return e.value.Float()
+}
+func (e *valueEvaluator) EvalBool(scope Scope) bool {
+	return e.value.Bool()
+}
+func (e *valueEvaluator) EvalTime(scope Scope) values.Time {
+	return e.value.Time()
+}
+func (e *valueEvaluator) EvalDuration(scope Scope) values.Duration {
+	return e.value.Duration()
+}
+func (e *valueEvaluator) EvalRegexp(scope Scope) *regexp.Regexp {
+	return e.value.Regexp()
+}
+func (e *valueEvaluator) EvalArray(scope Scope) values.Array {
+	return e.value.Array()
+}
+func (e *valueEvaluator) EvalObject(scope Scope) values.Object {
+	return e.value.Object()
+}
+func (e *valueEvaluator) EvalFunction(scope Scope) values.Function {
+	return e.value.Function()
 }
 
 type memberEvaluator struct {
@@ -939,928 +927,211 @@ func (e *memberEvaluator) Type() semantic.Type {
 	return e.t
 }
 
-func (e *memberEvaluator) EvalBool(scope Scope) bool {
-	return e.object.EvalObject(scope).Get(e.property).Bool()
-}
-
-func (e *memberEvaluator) EvalInt(scope Scope) int64 {
-	return e.object.EvalObject(scope).Get(e.property).Int()
-}
-
-func (e *memberEvaluator) EvalUInt(scope Scope) uint64 {
-	return e.object.EvalObject(scope).Get(e.property).UInt()
-}
-
-func (e *memberEvaluator) EvalFloat(scope Scope) float64 {
-	return e.object.EvalObject(scope).Get(e.property).Float()
-}
-
 func (e *memberEvaluator) EvalString(scope Scope) string {
-	return e.object.EvalObject(scope).Get(e.property).Str()
+	v, _ := e.object.EvalObject(scope).Get(e.property)
+	return v.Str()
+}
+func (e *memberEvaluator) EvalInt(scope Scope) int64 {
+	v, _ := e.object.EvalObject(scope).Get(e.property)
+	return v.Int()
+}
+func (e *memberEvaluator) EvalUInt(scope Scope) uint64 {
+	v, _ := e.object.EvalObject(scope).Get(e.property)
+	return v.UInt()
+}
+func (e *memberEvaluator) EvalFloat(scope Scope) float64 {
+	v, _ := e.object.EvalObject(scope).Get(e.property)
+	return v.Float()
+}
+func (e *memberEvaluator) EvalBool(scope Scope) bool {
+	v, _ := e.object.EvalObject(scope).Get(e.property)
+	return v.Bool()
+}
+func (e *memberEvaluator) EvalTime(scope Scope) values.Time {
+	v, _ := e.object.EvalObject(scope).Get(e.property)
+	return v.Time()
+}
+func (e *memberEvaluator) EvalDuration(scope Scope) values.Duration {
+	v, _ := e.object.EvalObject(scope).Get(e.property)
+	return v.Duration()
 }
 func (e *memberEvaluator) EvalRegexp(scope Scope) *regexp.Regexp {
-	return e.object.EvalObject(scope).Get(e.property).Regexp()
+	v, _ := e.object.EvalObject(scope).Get(e.property)
+	return v.Regexp()
+}
+func (e *memberEvaluator) EvalArray(scope Scope) values.Array {
+	v, _ := e.object.EvalObject(scope).Get(e.property)
+	return v.Array()
+}
+func (e *memberEvaluator) EvalObject(scope Scope) values.Object {
+	v, _ := e.object.EvalObject(scope).Get(e.property)
+	return v.Object()
+}
+func (e *memberEvaluator) EvalFunction(scope Scope) values.Function {
+	v, _ := e.object.EvalObject(scope).Get(e.property)
+	return v.Function()
 }
 
-func (e *memberEvaluator) EvalTime(scope Scope) Time {
-	return e.object.EvalObject(scope).Get(e.property).Time()
+type callEvaluator struct {
+	t      semantic.Type
+	callee Evaluator
+	args   Evaluator
 }
-func (e *memberEvaluator) EvalObject(scope Scope) *Object {
-	return e.object.EvalObject(scope).Get(e.property).Object()
+
+func (e *callEvaluator) Type() semantic.Type {
+	return e.t
 }
 
-// Map of binary functions
-var binaryFuncs = map[binarySignature]struct {
-	Func       binaryFunc
-	ResultKind semantic.Kind
-}{
-	//---------------
-	// Math Operators
-	//---------------
-	{Operator: ast.AdditionOperator, Left: semantic.Int, Right: semantic.Int}: {
-		Func: func(scope Scope, left, right Evaluator) Value {
-			l := left.EvalInt(scope)
-			r := right.EvalInt(scope)
-			return value{
-				typ:   semantic.Int,
-				Value: l + r,
-			}
-		},
-		ResultKind: semantic.Int,
-	},
-	{Operator: ast.AdditionOperator, Left: semantic.UInt, Right: semantic.UInt}: {
-		Func: func(scope Scope, left, right Evaluator) Value {
-			l := left.EvalUInt(scope)
-			r := right.EvalUInt(scope)
-			return value{
-				typ:   semantic.UInt,
-				Value: l + r,
-			}
-		},
-		ResultKind: semantic.UInt,
-	},
-	{Operator: ast.AdditionOperator, Left: semantic.Float, Right: semantic.Float}: {
-		Func: func(scope Scope, left, right Evaluator) Value {
-			l := left.EvalFloat(scope)
-			r := right.EvalFloat(scope)
-			return value{
-				typ:   semantic.Float,
-				Value: l + r,
-			}
-		},
-		ResultKind: semantic.Float,
-	},
-	{Operator: ast.SubtractionOperator, Left: semantic.Int, Right: semantic.Int}: {
-		Func: func(scope Scope, left, right Evaluator) Value {
-			l := left.EvalInt(scope)
-			r := right.EvalInt(scope)
-			return value{
-				typ:   semantic.Int,
-				Value: l - r,
-			}
-		},
-		ResultKind: semantic.Int,
-	},
-	{Operator: ast.SubtractionOperator, Left: semantic.UInt, Right: semantic.UInt}: {
-		Func: func(scope Scope, left, right Evaluator) Value {
-			l := left.EvalUInt(scope)
-			r := right.EvalUInt(scope)
-			return value{
-				typ:   semantic.UInt,
-				Value: l - r,
-			}
-		},
-		ResultKind: semantic.UInt,
-	},
-	{Operator: ast.SubtractionOperator, Left: semantic.Float, Right: semantic.Float}: {
-		Func: func(scope Scope, left, right Evaluator) Value {
-			l := left.EvalFloat(scope)
-			r := right.EvalFloat(scope)
-			return value{
-				typ:   semantic.Float,
-				Value: l - r,
-			}
-		},
-		ResultKind: semantic.Float,
-	},
-	{Operator: ast.MultiplicationOperator, Left: semantic.Int, Right: semantic.Int}: {
-		Func: func(scope Scope, left, right Evaluator) Value {
-			l := left.EvalInt(scope)
-			r := right.EvalInt(scope)
-			return value{
-				typ:   semantic.Int,
-				Value: l * r,
-			}
-		},
-		ResultKind: semantic.Int,
-	},
-	{Operator: ast.MultiplicationOperator, Left: semantic.UInt, Right: semantic.UInt}: {
-		Func: func(scope Scope, left, right Evaluator) Value {
-			l := left.EvalUInt(scope)
-			r := right.EvalUInt(scope)
-			return value{
-				typ:   semantic.UInt,
-				Value: l * r,
-			}
-		},
-		ResultKind: semantic.UInt,
-	},
-	{Operator: ast.MultiplicationOperator, Left: semantic.Float, Right: semantic.Float}: {
-		Func: func(scope Scope, left, right Evaluator) Value {
-			l := left.EvalFloat(scope)
-			r := right.EvalFloat(scope)
-			return value{
-				typ:   semantic.Float,
-				Value: l * r,
-			}
-		},
-		ResultKind: semantic.Float,
-	},
-	{Operator: ast.DivisionOperator, Left: semantic.Int, Right: semantic.Int}: {
-		Func: func(scope Scope, left, right Evaluator) Value {
-			l := left.EvalInt(scope)
-			r := right.EvalInt(scope)
-			return value{
-				typ:   semantic.Int,
-				Value: l / r,
-			}
-		},
-		ResultKind: semantic.Int,
-	},
-	{Operator: ast.DivisionOperator, Left: semantic.UInt, Right: semantic.UInt}: {
-		Func: func(scope Scope, left, right Evaluator) Value {
-			l := left.EvalUInt(scope)
-			r := right.EvalUInt(scope)
-			return value{
-				typ:   semantic.UInt,
-				Value: l / r,
-			}
-		},
-		ResultKind: semantic.UInt,
-	},
-	{Operator: ast.DivisionOperator, Left: semantic.Float, Right: semantic.Float}: {
-		Func: func(scope Scope, left, right Evaluator) Value {
-			l := left.EvalFloat(scope)
-			r := right.EvalFloat(scope)
-			return value{
-				typ:   semantic.Float,
-				Value: l / r,
-			}
-		},
-		ResultKind: semantic.Float,
-	},
+func (e *callEvaluator) eval(scope Scope) values.Value {
+	args := e.args.EvalObject(scope)
+	f := e.callee.EvalFunction(scope)
+	//TODO(nathanielc): What to do about error when calling functions?
+	v, _ := f.Call(args)
+	return v
+}
 
-	//---------------------
-	// Comparison Operators
-	//---------------------
+func (e *callEvaluator) EvalString(scope Scope) string {
+	return e.eval(scope).Str()
+}
+func (e *callEvaluator) EvalInt(scope Scope) int64 {
+	return e.eval(scope).Int()
+}
+func (e *callEvaluator) EvalUInt(scope Scope) uint64 {
+	return e.eval(scope).UInt()
+}
+func (e *callEvaluator) EvalFloat(scope Scope) float64 {
+	return e.eval(scope).Float()
+}
+func (e *callEvaluator) EvalBool(scope Scope) bool {
+	return e.eval(scope).Bool()
+}
+func (e *callEvaluator) EvalTime(scope Scope) values.Time {
+	return e.eval(scope).Time()
+}
+func (e *callEvaluator) EvalDuration(scope Scope) values.Duration {
+	return e.eval(scope).Duration()
+}
+func (e *callEvaluator) EvalRegexp(scope Scope) *regexp.Regexp {
+	return e.eval(scope).Regexp()
+}
+func (e *callEvaluator) EvalArray(scope Scope) values.Array {
+	return e.eval(scope).Array()
+}
+func (e *callEvaluator) EvalObject(scope Scope) values.Object {
+	return e.eval(scope).Object()
+}
+func (e *callEvaluator) EvalFunction(scope Scope) values.Function {
+	return e.eval(scope).Function()
+}
 
-	// LessThanEqualOperator
+type functionEvaluator struct {
+	t      semantic.Type
+	body   Evaluator
+	params []functionParam
+}
 
-	{Operator: ast.LessThanEqualOperator, Left: semantic.Int, Right: semantic.Int}: {
-		Func: func(scope Scope, left, right Evaluator) Value {
-			l := left.EvalInt(scope)
-			r := right.EvalInt(scope)
-			return value{
-				typ:   semantic.Bool,
-				Value: l <= r,
-			}
-		},
-		ResultKind: semantic.Bool,
-	},
-	{Operator: ast.LessThanEqualOperator, Left: semantic.Int, Right: semantic.UInt}: {
-		Func: func(scope Scope, left, right Evaluator) Value {
-			l := left.EvalInt(scope)
-			r := right.EvalUInt(scope)
-			if l < 0 {
-				return value{
-					typ:   semantic.Bool,
-					Value: true,
-				}
-			}
-			return value{
-				typ:   semantic.Bool,
-				Value: uint64(l) <= r,
-			}
-		},
-		ResultKind: semantic.Bool,
-	},
-	{Operator: ast.LessThanEqualOperator, Left: semantic.Int, Right: semantic.Float}: {
-		Func: func(scope Scope, left, right Evaluator) Value {
-			l := left.EvalInt(scope)
-			r := right.EvalFloat(scope)
-			return value{
-				typ:   semantic.Bool,
-				Value: float64(l) <= r,
-			}
-		},
-		ResultKind: semantic.Bool,
-	},
-	{Operator: ast.LessThanEqualOperator, Left: semantic.UInt, Right: semantic.Int}: {
-		Func: func(scope Scope, left, right Evaluator) Value {
-			l := left.EvalUInt(scope)
-			r := right.EvalInt(scope)
-			if r < 0 {
-				return value{
-					typ:   semantic.Bool,
-					Value: false,
-				}
-			}
-			return value{
-				typ:   semantic.Bool,
-				Value: l <= uint64(r),
-			}
-		},
-		ResultKind: semantic.Bool,
-	},
-	{Operator: ast.LessThanEqualOperator, Left: semantic.UInt, Right: semantic.UInt}: {
-		Func: func(scope Scope, left, right Evaluator) Value {
-			l := left.EvalUInt(scope)
-			r := right.EvalUInt(scope)
-			return value{
-				typ:   semantic.Bool,
-				Value: l <= r,
-			}
-		},
-		ResultKind: semantic.Bool,
-	},
-	{Operator: ast.LessThanEqualOperator, Left: semantic.UInt, Right: semantic.Float}: {
-		Func: func(scope Scope, left, right Evaluator) Value {
-			l := left.EvalUInt(scope)
-			r := right.EvalFloat(scope)
-			return value{
-				typ:   semantic.Bool,
-				Value: float64(l) <= r,
-			}
-		},
-		ResultKind: semantic.Bool,
-	},
-	{Operator: ast.LessThanEqualOperator, Left: semantic.Float, Right: semantic.Int}: {
-		Func: func(scope Scope, left, right Evaluator) Value {
-			l := left.EvalFloat(scope)
-			r := right.EvalInt(scope)
-			return value{
-				typ:   semantic.Bool,
-				Value: l <= float64(r),
-			}
-		},
-		ResultKind: semantic.Bool,
-	},
-	{Operator: ast.LessThanEqualOperator, Left: semantic.Float, Right: semantic.UInt}: {
-		Func: func(scope Scope, left, right Evaluator) Value {
-			l := left.EvalFloat(scope)
-			r := right.EvalUInt(scope)
-			return value{
-				typ:   semantic.Bool,
-				Value: l <= float64(r),
-			}
-		},
-		ResultKind: semantic.Bool,
-	},
-	{Operator: ast.LessThanEqualOperator, Left: semantic.Float, Right: semantic.Float}: {
-		Func: func(scope Scope, left, right Evaluator) Value {
-			l := left.EvalFloat(scope)
-			r := right.EvalFloat(scope)
-			return value{
-				typ:   semantic.Bool,
-				Value: l <= r,
-			}
-		},
-		ResultKind: semantic.Bool,
-	},
+func (e *functionEvaluator) Type() semantic.Type {
+	return e.t
+}
 
-	// LessThanOperator
+func (e *functionEvaluator) EvalString(scope Scope) string {
+	panic(values.UnexpectedKind(e.t.Kind(), semantic.String))
+}
+func (e *functionEvaluator) EvalInt(scope Scope) int64 {
+	panic(values.UnexpectedKind(e.t.Kind(), semantic.Int))
+}
+func (e *functionEvaluator) EvalUInt(scope Scope) uint64 {
+	panic(values.UnexpectedKind(e.t.Kind(), semantic.UInt))
+}
+func (e *functionEvaluator) EvalFloat(scope Scope) float64 {
+	panic(values.UnexpectedKind(e.t.Kind(), semantic.Float))
+}
+func (e *functionEvaluator) EvalBool(scope Scope) bool {
+	panic(values.UnexpectedKind(e.t.Kind(), semantic.Bool))
+}
+func (e *functionEvaluator) EvalTime(scope Scope) values.Time {
+	panic(values.UnexpectedKind(e.t.Kind(), semantic.Time))
+}
+func (e *functionEvaluator) EvalDuration(scope Scope) values.Duration {
+	panic(values.UnexpectedKind(e.t.Kind(), semantic.Duration))
+}
+func (e *functionEvaluator) EvalRegexp(scope Scope) *regexp.Regexp {
+	panic(values.UnexpectedKind(e.t.Kind(), semantic.Regexp))
+}
+func (e *functionEvaluator) EvalArray(scope Scope) values.Array {
+	panic(values.UnexpectedKind(e.t.Kind(), semantic.Array))
+}
+func (e *functionEvaluator) EvalObject(scope Scope) values.Object {
+	panic(values.UnexpectedKind(e.t.Kind(), semantic.Object))
+}
+func (e *functionEvaluator) EvalFunction(scope Scope) values.Function {
+	return functionValue{
+		t:      e.t,
+		body:   e.body,
+		params: e.params,
+		scope:  scope.Copy(),
+	}
+}
 
-	{Operator: ast.LessThanOperator, Left: semantic.Int, Right: semantic.Int}: {
-		Func: func(scope Scope, left, right Evaluator) Value {
-			l := left.EvalInt(scope)
-			r := right.EvalInt(scope)
-			return value{
-				typ:   semantic.Bool,
-				Value: l < r,
-			}
-		},
-		ResultKind: semantic.Bool,
-	},
-	{Operator: ast.LessThanOperator, Left: semantic.Int, Right: semantic.UInt}: {
-		Func: func(scope Scope, left, right Evaluator) Value {
-			l := left.EvalInt(scope)
-			r := right.EvalUInt(scope)
-			if l < 0 {
-				return value{
-					typ:   semantic.Bool,
-					Value: true,
-				}
-			}
-			return value{
-				typ:   semantic.Bool,
-				Value: uint64(l) < r,
-			}
-		},
-		ResultKind: semantic.Bool,
-	},
-	{Operator: ast.LessThanOperator, Left: semantic.Int, Right: semantic.Float}: {
-		Func: func(scope Scope, left, right Evaluator) Value {
-			l := left.EvalInt(scope)
-			r := right.EvalFloat(scope)
-			return value{
-				typ:   semantic.Bool,
-				Value: float64(l) < r,
-			}
-		},
-		ResultKind: semantic.Bool,
-	},
-	{Operator: ast.LessThanOperator, Left: semantic.UInt, Right: semantic.Int}: {
-		Func: func(scope Scope, left, right Evaluator) Value {
-			l := left.EvalUInt(scope)
-			r := right.EvalInt(scope)
-			if r < 0 {
-				return value{
-					typ:   semantic.Bool,
-					Value: false,
-				}
-			}
-			return value{
-				typ:   semantic.Bool,
-				Value: l < uint64(r),
-			}
-		},
-		ResultKind: semantic.Bool,
-	},
-	{Operator: ast.LessThanOperator, Left: semantic.UInt, Right: semantic.UInt}: {
-		Func: func(scope Scope, left, right Evaluator) Value {
-			l := left.EvalUInt(scope)
-			r := right.EvalUInt(scope)
-			return value{
-				typ:   semantic.Bool,
-				Value: l < r,
-			}
-		},
-		ResultKind: semantic.Bool,
-	},
-	{Operator: ast.LessThanOperator, Left: semantic.UInt, Right: semantic.Float}: {
-		Func: func(scope Scope, left, right Evaluator) Value {
-			l := left.EvalUInt(scope)
-			r := right.EvalFloat(scope)
-			return value{
-				typ:   semantic.Bool,
-				Value: float64(l) < r,
-			}
-		},
-		ResultKind: semantic.Bool,
-	},
-	{Operator: ast.LessThanOperator, Left: semantic.Float, Right: semantic.Int}: {
-		Func: func(scope Scope, left, right Evaluator) Value {
-			l := left.EvalFloat(scope)
-			r := right.EvalInt(scope)
-			return value{
-				typ:   semantic.Bool,
-				Value: l < float64(r),
-			}
-		},
-		ResultKind: semantic.Bool,
-	},
-	{Operator: ast.LessThanOperator, Left: semantic.Float, Right: semantic.UInt}: {
-		Func: func(scope Scope, left, right Evaluator) Value {
-			l := left.EvalFloat(scope)
-			r := right.EvalUInt(scope)
-			return value{
-				typ:   semantic.Bool,
-				Value: l < float64(r),
-			}
-		},
-		ResultKind: semantic.Bool,
-	},
-	{Operator: ast.LessThanOperator, Left: semantic.Float, Right: semantic.Float}: {
-		Func: func(scope Scope, left, right Evaluator) Value {
-			l := left.EvalFloat(scope)
-			r := right.EvalFloat(scope)
-			return value{
-				typ:   semantic.Bool,
-				Value: l < r,
-			}
-		},
-		ResultKind: semantic.Bool,
-	},
+type functionValue struct {
+	t      semantic.Type
+	body   Evaluator
+	params []functionParam
+	scope  Scope
+}
 
-	// GreaterThanEqualOperator
+type functionParam struct {
+	Key     string
+	Default Evaluator
+	Type    semantic.Type
+}
 
-	{Operator: ast.GreaterThanEqualOperator, Left: semantic.Int, Right: semantic.Int}: {
-		Func: func(scope Scope, left, right Evaluator) Value {
-			l := left.EvalInt(scope)
-			r := right.EvalInt(scope)
-			return value{
-				typ:   semantic.Bool,
-				Value: l >= r,
-			}
-		},
-		ResultKind: semantic.Bool,
-	},
-	{Operator: ast.GreaterThanEqualOperator, Left: semantic.Int, Right: semantic.UInt}: {
-		Func: func(scope Scope, left, right Evaluator) Value {
-			l := left.EvalInt(scope)
-			r := right.EvalUInt(scope)
-			if l < 0 {
-				return value{
-					typ:   semantic.Bool,
-					Value: true,
-				}
-			}
-			return value{
-				typ:   semantic.Bool,
-				Value: uint64(l) >= r,
-			}
-		},
-		ResultKind: semantic.Bool,
-	},
-	{Operator: ast.GreaterThanEqualOperator, Left: semantic.Int, Right: semantic.Float}: {
-		Func: func(scope Scope, left, right Evaluator) Value {
-			l := left.EvalInt(scope)
-			r := right.EvalFloat(scope)
-			return value{
-				typ:   semantic.Bool,
-				Value: float64(l) >= r,
-			}
-		},
-		ResultKind: semantic.Bool,
-	},
-	{Operator: ast.GreaterThanEqualOperator, Left: semantic.UInt, Right: semantic.Int}: {
-		Func: func(scope Scope, left, right Evaluator) Value {
-			l := left.EvalUInt(scope)
-			r := right.EvalInt(scope)
-			if r < 0 {
-				return value{
-					typ:   semantic.Bool,
-					Value: false,
-				}
-			}
-			return value{
-				typ:   semantic.Bool,
-				Value: l >= uint64(r),
-			}
-		},
-		ResultKind: semantic.Bool,
-	},
-	{Operator: ast.GreaterThanEqualOperator, Left: semantic.UInt, Right: semantic.UInt}: {
-		Func: func(scope Scope, left, right Evaluator) Value {
-			l := left.EvalUInt(scope)
-			r := right.EvalUInt(scope)
-			return value{
-				typ:   semantic.Bool,
-				Value: l >= r,
-			}
-		},
-		ResultKind: semantic.Bool,
-	},
-	{Operator: ast.GreaterThanEqualOperator, Left: semantic.UInt, Right: semantic.Float}: {
-		Func: func(scope Scope, left, right Evaluator) Value {
-			l := left.EvalUInt(scope)
-			r := right.EvalFloat(scope)
-			return value{
-				typ:   semantic.Bool,
-				Value: float64(l) >= r,
-			}
-		},
-		ResultKind: semantic.Bool,
-	},
-	{Operator: ast.GreaterThanEqualOperator, Left: semantic.Float, Right: semantic.Int}: {
-		Func: func(scope Scope, left, right Evaluator) Value {
-			l := left.EvalFloat(scope)
-			r := right.EvalInt(scope)
-			return value{
-				typ:   semantic.Bool,
-				Value: l >= float64(r),
-			}
-		},
-		ResultKind: semantic.Bool,
-	},
-	{Operator: ast.GreaterThanEqualOperator, Left: semantic.Float, Right: semantic.UInt}: {
-		Func: func(scope Scope, left, right Evaluator) Value {
-			l := left.EvalFloat(scope)
-			r := right.EvalUInt(scope)
-			return value{
-				typ:   semantic.Bool,
-				Value: l >= float64(r),
-			}
-		},
-		ResultKind: semantic.Bool,
-	},
-	{Operator: ast.GreaterThanEqualOperator, Left: semantic.Float, Right: semantic.Float}: {
-		Func: func(scope Scope, left, right Evaluator) Value {
-			l := left.EvalFloat(scope)
-			r := right.EvalFloat(scope)
-			return value{
-				typ:   semantic.Bool,
-				Value: l >= r,
-			}
-		},
-		ResultKind: semantic.Bool,
-	},
+func (f functionValue) Type() semantic.Type {
+	return f.t
+}
 
-	// GreaterThanOperator
+func (f functionValue) Str() string {
+	panic(values.UnexpectedKind(semantic.Function, semantic.String))
+}
+func (f functionValue) Int() int64 {
+	panic(values.UnexpectedKind(semantic.Function, semantic.Int))
+}
+func (f functionValue) UInt() uint64 {
+	panic(values.UnexpectedKind(semantic.Function, semantic.UInt))
+}
+func (f functionValue) Float() float64 {
+	panic(values.UnexpectedKind(semantic.Function, semantic.Float))
+}
+func (f functionValue) Bool() bool {
+	panic(values.UnexpectedKind(semantic.Function, semantic.Bool))
+}
+func (f functionValue) Time() values.Time {
+	panic(values.UnexpectedKind(semantic.Function, semantic.Time))
+}
+func (f functionValue) Duration() values.Duration {
+	panic(values.UnexpectedKind(semantic.Function, semantic.Duration))
+}
+func (f functionValue) Regexp() *regexp.Regexp {
+	panic(values.UnexpectedKind(semantic.Function, semantic.Regexp))
+}
+func (f functionValue) Array() values.Array {
+	panic(values.UnexpectedKind(semantic.Function, semantic.Array))
+}
+func (f functionValue) Object() values.Object {
+	panic(values.UnexpectedKind(semantic.Function, semantic.Object))
+}
+func (f functionValue) Function() values.Function {
+	return f
+}
 
-	{Operator: ast.GreaterThanOperator, Left: semantic.Int, Right: semantic.Int}: {
-		Func: func(scope Scope, left, right Evaluator) Value {
-			l := left.EvalInt(scope)
-			r := right.EvalInt(scope)
-			return value{
-				typ:   semantic.Bool,
-				Value: l > r,
-			}
-		},
-		ResultKind: semantic.Bool,
-	},
-	{Operator: ast.GreaterThanOperator, Left: semantic.Int, Right: semantic.UInt}: {
-		Func: func(scope Scope, left, right Evaluator) Value {
-			l := left.EvalInt(scope)
-			r := right.EvalUInt(scope)
-			if l < 0 {
-				return value{
-					typ:   semantic.Bool,
-					Value: true,
-				}
-			}
-			return value{
-				typ:   semantic.Bool,
-				Value: uint64(l) > r,
-			}
-		},
-		ResultKind: semantic.Bool,
-	},
-	{Operator: ast.GreaterThanOperator, Left: semantic.Int, Right: semantic.Float}: {
-		Func: func(scope Scope, left, right Evaluator) Value {
-			l := left.EvalInt(scope)
-			r := right.EvalFloat(scope)
-			return value{
-				typ:   semantic.Bool,
-				Value: float64(l) > r,
-			}
-		},
-		ResultKind: semantic.Bool,
-	},
-	{Operator: ast.GreaterThanOperator, Left: semantic.UInt, Right: semantic.Int}: {
-		Func: func(scope Scope, left, right Evaluator) Value {
-			l := left.EvalUInt(scope)
-			r := right.EvalInt(scope)
-			if r < 0 {
-				return value{
-					typ:   semantic.Bool,
-					Value: false,
-				}
-			}
-			return value{
-				typ:   semantic.Bool,
-				Value: l > uint64(r),
-			}
-		},
-		ResultKind: semantic.Bool,
-	},
-	{Operator: ast.GreaterThanOperator, Left: semantic.UInt, Right: semantic.UInt}: {
-		Func: func(scope Scope, left, right Evaluator) Value {
-			l := left.EvalUInt(scope)
-			r := right.EvalUInt(scope)
-			return value{
-				typ:   semantic.Bool,
-				Value: l > r,
-			}
-		},
-		ResultKind: semantic.Bool,
-	},
-	{Operator: ast.GreaterThanOperator, Left: semantic.UInt, Right: semantic.Float}: {
-		Func: func(scope Scope, left, right Evaluator) Value {
-			l := left.EvalUInt(scope)
-			r := right.EvalFloat(scope)
-			return value{
-				typ:   semantic.Bool,
-				Value: float64(l) > r,
-			}
-		},
-		ResultKind: semantic.Bool,
-	},
-	{Operator: ast.GreaterThanOperator, Left: semantic.Float, Right: semantic.Int}: {
-		Func: func(scope Scope, left, right Evaluator) Value {
-			l := left.EvalFloat(scope)
-			r := right.EvalInt(scope)
-			return value{
-				typ:   semantic.Bool,
-				Value: l > float64(r),
-			}
-		},
-		ResultKind: semantic.Bool,
-	},
-	{Operator: ast.GreaterThanOperator, Left: semantic.Float, Right: semantic.UInt}: {
-		Func: func(scope Scope, left, right Evaluator) Value {
-			l := left.EvalFloat(scope)
-			r := right.EvalUInt(scope)
-			return value{
-				typ:   semantic.Bool,
-				Value: l > float64(r),
-			}
-		},
-		ResultKind: semantic.Bool,
-	},
-	{Operator: ast.GreaterThanOperator, Left: semantic.Float, Right: semantic.Float}: {
-		Func: func(scope Scope, left, right Evaluator) Value {
-			l := left.EvalFloat(scope)
-			r := right.EvalFloat(scope)
-			return value{
-				typ:   semantic.Bool,
-				Value: l > r,
-			}
-		},
-		ResultKind: semantic.Bool,
-	},
-
-	// EqualOperator
-
-	{Operator: ast.EqualOperator, Left: semantic.Int, Right: semantic.Int}: {
-		Func: func(scope Scope, left, right Evaluator) Value {
-			l := left.EvalInt(scope)
-			r := right.EvalInt(scope)
-			return value{
-				typ:   semantic.Bool,
-				Value: l == r,
-			}
-		},
-		ResultKind: semantic.Bool,
-	},
-	{Operator: ast.EqualOperator, Left: semantic.Int, Right: semantic.UInt}: {
-		Func: func(scope Scope, left, right Evaluator) Value {
-			l := left.EvalInt(scope)
-			r := right.EvalUInt(scope)
-			if l < 0 {
-				return value{
-					typ:   semantic.Bool,
-					Value: false,
-				}
-			}
-			return value{
-				typ:   semantic.Bool,
-				Value: uint64(l) == r,
-			}
-		},
-		ResultKind: semantic.Bool,
-	},
-	{Operator: ast.EqualOperator, Left: semantic.Int, Right: semantic.Float}: {
-		Func: func(scope Scope, left, right Evaluator) Value {
-			l := left.EvalInt(scope)
-			r := right.EvalFloat(scope)
-			return value{
-				typ:   semantic.Bool,
-				Value: float64(l) == r,
-			}
-		},
-		ResultKind: semantic.Bool,
-	},
-	{Operator: ast.EqualOperator, Left: semantic.UInt, Right: semantic.Int}: {
-		Func: func(scope Scope, left, right Evaluator) Value {
-			l := left.EvalUInt(scope)
-			r := right.EvalInt(scope)
-			if r < 0 {
-				return value{
-					typ:   semantic.Bool,
-					Value: false,
-				}
-			}
-			return value{
-				typ:   semantic.Bool,
-				Value: l == uint64(r),
-			}
-		},
-		ResultKind: semantic.Bool,
-	},
-	{Operator: ast.EqualOperator, Left: semantic.UInt, Right: semantic.UInt}: {
-		Func: func(scope Scope, left, right Evaluator) Value {
-			l := left.EvalUInt(scope)
-			r := right.EvalUInt(scope)
-			return value{
-				typ:   semantic.Bool,
-				Value: l == r,
-			}
-		},
-		ResultKind: semantic.Bool,
-	},
-	{Operator: ast.EqualOperator, Left: semantic.UInt, Right: semantic.Float}: {
-		Func: func(scope Scope, left, right Evaluator) Value {
-			l := left.EvalUInt(scope)
-			r := right.EvalFloat(scope)
-			return value{
-				typ:   semantic.Bool,
-				Value: float64(l) == r,
-			}
-		},
-		ResultKind: semantic.Bool,
-	},
-	{Operator: ast.EqualOperator, Left: semantic.Float, Right: semantic.Int}: {
-		Func: func(scope Scope, left, right Evaluator) Value {
-			l := left.EvalFloat(scope)
-			r := right.EvalInt(scope)
-			return value{
-				typ:   semantic.Bool,
-				Value: l == float64(r),
-			}
-		},
-		ResultKind: semantic.Bool,
-	},
-	{Operator: ast.EqualOperator, Left: semantic.Float, Right: semantic.UInt}: {
-		Func: func(scope Scope, left, right Evaluator) Value {
-			l := left.EvalFloat(scope)
-			r := right.EvalUInt(scope)
-			return value{
-				typ:   semantic.Bool,
-				Value: l == float64(r),
-			}
-		},
-		ResultKind: semantic.Bool,
-	},
-	{Operator: ast.EqualOperator, Left: semantic.Float, Right: semantic.Float}: {
-		Func: func(scope Scope, left, right Evaluator) Value {
-			l := left.EvalFloat(scope)
-			r := right.EvalFloat(scope)
-			return value{
-				typ:   semantic.Bool,
-				Value: l == r,
-			}
-		},
-		ResultKind: semantic.Bool,
-	},
-	{Operator: ast.EqualOperator, Left: semantic.String, Right: semantic.String}: {
-		Func: func(scope Scope, left, right Evaluator) Value {
-			l := left.EvalString(scope)
-			r := right.EvalString(scope)
-			return value{
-				typ:   semantic.Bool,
-				Value: l == r,
-			}
-		},
-		ResultKind: semantic.Bool,
-	},
-
-	// NotEqualOperator
-
-	{Operator: ast.NotEqualOperator, Left: semantic.Int, Right: semantic.Int}: {
-		Func: func(scope Scope, left, right Evaluator) Value {
-			l := left.EvalInt(scope)
-			r := right.EvalInt(scope)
-			return value{
-				typ:   semantic.Bool,
-				Value: l != r,
-			}
-		},
-		ResultKind: semantic.Bool,
-	},
-	{Operator: ast.NotEqualOperator, Left: semantic.Int, Right: semantic.UInt}: {
-		Func: func(scope Scope, left, right Evaluator) Value {
-			l := left.EvalInt(scope)
-			r := right.EvalUInt(scope)
-			if l < 0 {
-				return value{
-					typ:   semantic.Bool,
-					Value: true,
-				}
-			}
-			return value{
-				typ:   semantic.Bool,
-				Value: uint64(l) != r,
-			}
-		},
-		ResultKind: semantic.Bool,
-	},
-	{Operator: ast.NotEqualOperator, Left: semantic.Int, Right: semantic.Float}: {
-		Func: func(scope Scope, left, right Evaluator) Value {
-			l := left.EvalInt(scope)
-			r := right.EvalFloat(scope)
-			return value{
-				typ:   semantic.Bool,
-				Value: float64(l) != r,
-			}
-		},
-		ResultKind: semantic.Bool,
-	},
-	{Operator: ast.NotEqualOperator, Left: semantic.UInt, Right: semantic.Int}: {
-		Func: func(scope Scope, left, right Evaluator) Value {
-			l := left.EvalUInt(scope)
-			r := right.EvalInt(scope)
-			if r < 0 {
-				return value{
-					typ:   semantic.Bool,
-					Value: true,
-				}
-			}
-			return value{
-				typ:   semantic.Bool,
-				Value: l != uint64(r),
-			}
-		},
-		ResultKind: semantic.Bool,
-	},
-	{Operator: ast.NotEqualOperator, Left: semantic.UInt, Right: semantic.UInt}: {
-		Func: func(scope Scope, left, right Evaluator) Value {
-			l := left.EvalUInt(scope)
-			r := right.EvalUInt(scope)
-			return value{
-				typ:   semantic.Bool,
-				Value: l != r,
-			}
-		},
-		ResultKind: semantic.Bool,
-	},
-	{Operator: ast.NotEqualOperator, Left: semantic.UInt, Right: semantic.Float}: {
-		Func: func(scope Scope, left, right Evaluator) Value {
-			l := left.EvalUInt(scope)
-			r := right.EvalFloat(scope)
-			return value{
-				typ:   semantic.Bool,
-				Value: float64(l) != r,
-			}
-		},
-		ResultKind: semantic.Bool,
-	},
-	{Operator: ast.NotEqualOperator, Left: semantic.Float, Right: semantic.Int}: {
-		Func: func(scope Scope, left, right Evaluator) Value {
-			l := left.EvalFloat(scope)
-			r := right.EvalInt(scope)
-			return value{
-				typ:   semantic.Bool,
-				Value: l != float64(r),
-			}
-		},
-		ResultKind: semantic.Bool,
-	},
-	{Operator: ast.NotEqualOperator, Left: semantic.Float, Right: semantic.UInt}: {
-		Func: func(scope Scope, left, right Evaluator) Value {
-			l := left.EvalFloat(scope)
-			r := right.EvalUInt(scope)
-			return value{
-				typ:   semantic.Bool,
-				Value: l != float64(r),
-			}
-		},
-		ResultKind: semantic.Bool,
-	},
-	{Operator: ast.NotEqualOperator, Left: semantic.Float, Right: semantic.Float}: {
-		Func: func(scope Scope, left, right Evaluator) Value {
-			l := left.EvalFloat(scope)
-			r := right.EvalFloat(scope)
-			return value{
-				typ:   semantic.Bool,
-				Value: l != r,
-			}
-		},
-		ResultKind: semantic.Bool,
-	},
-	{Operator: ast.NotEqualOperator, Left: semantic.String, Right: semantic.String}: {
-		Func: func(scope Scope, left, right Evaluator) Value {
-			l := left.EvalString(scope)
-			r := right.EvalString(scope)
-			return value{
-				typ:   semantic.Bool,
-				Value: l != r,
-			}
-		},
-		ResultKind: semantic.Bool,
-	},
-	{Operator: ast.RegexpMatchOperator, Left: semantic.String, Right: semantic.Regexp}: {
-		Func: func(scope Scope, left, right Evaluator) Value {
-			l := left.EvalString(scope)
-			r := right.EvalRegexp(scope)
-			return value{
-				typ:   semantic.Bool,
-				Value: r.MatchString(l),
-			}
-		},
-		ResultKind: semantic.Bool,
-	},
-	{Operator: ast.RegexpMatchOperator, Left: semantic.Regexp, Right: semantic.String}: {
-		Func: func(scope Scope, left, right Evaluator) Value {
-			l := left.EvalRegexp(scope)
-			r := right.EvalString(scope)
-			return value{
-				typ:   semantic.Bool,
-				Value: l.MatchString(r),
-			}
-		},
-		ResultKind: semantic.Bool,
-	},
-	{Operator: ast.NotRegexpMatchOperator, Left: semantic.String, Right: semantic.Regexp}: {
-		Func: func(scope Scope, left, right Evaluator) Value {
-			l := left.EvalString(scope)
-			r := right.EvalRegexp(scope)
-			return value{
-				typ:   semantic.Bool,
-				Value: !r.MatchString(l),
-			}
-		},
-		ResultKind: semantic.Bool,
-	},
-	{Operator: ast.NotRegexpMatchOperator, Left: semantic.Regexp, Right: semantic.String}: {
-		Func: func(scope Scope, left, right Evaluator) Value {
-			l := left.EvalRegexp(scope)
-			r := right.EvalString(scope)
-			return value{
-				typ:   semantic.Bool,
-				Value: !l.MatchString(r),
-			}
-		},
-		ResultKind: semantic.Bool,
-	},
+func (f functionValue) Call(args values.Object) (values.Value, error) {
+	scope := f.scope.Copy()
+	for _, p := range f.params {
+		v, ok := args.Get(p.Key)
+		if !ok && p.Default != nil {
+			v = eval(p.Default, f.scope)
+		}
+		scope.Set(p.Key, v)
+	}
+	return eval(f.body, scope), nil
 }

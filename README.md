@@ -137,6 +137,29 @@ Use the start time as the timestamp of the resulting aggregate.
 
 Example: `from(db:"telegraf") |> count()`
 
+#### filter
+
+Filters the results using an expression
+
+Example:
+```
+from(db:"foo")
+    |> filter(fn: (r) => r["_measurement"]=="cpu" AND
+                r["_field"] == "usage_system" AND
+                r["service"] == "app-server")
+    |> range(start:-12h)
+    |> max()
+```
+
+##### options
+
+* `fn` function(record) bool
+
+Function to when filtering the records.
+The function must accept a single parameter which will be the records and return a boolean value.
+Records which evaluate to true, will be included in the results.
+
+
 #### first
 
 Returns the first result of the query
@@ -430,26 +453,69 @@ Use the start time as the timestamp of the resulting aggregate.
 
 Example: `from(db: "telegraf") |> range(start: -30m, stop: -15m) |> sum()`
 
-#### filter
-Filters the results using an expression
+### toBool
 
-Example:
-```
-from(db:"foo")
-    |> filter(fn: (r) => r["_measurement"]=="cpu" AND
-                r["_field"] == "usage_system" AND
-                r["service"] == "app-server")
-    |> range(start:-12h)
-    |> max()
-```
+Convert a value to a bool.
 
-##### options
+Example: `from(db: "telegraf") |> filter(fn:(r) => r._measurement == "mem" and r._field == "used") |> toBool()`
 
-* `fn` function(record) bool
+The function `toBool` is defined as `toBool = (table=<-) => table |> map(fn:(r) => bool(v:r._value))`.
+If you need to convert other columns use the `map` function directly with the `bool` function.
 
-Function to when filtering the records.
-The function must accept a single parameter which will be the records and return a boolean value.
-Records which evaluate to true, will be included in the results.
+### toInt
+
+Convert a value to a int.
+
+Example: `from(db: "telegraf") |> filter(fn:(r) => r._measurement == "mem" and r._field == "used") |> toInt()`
+
+The function `toInt` is defined as `toInt = (table=<-) => table |> map(fn:(r) => int(v:r._value))`.
+If you need to convert other columns use the `map` function directly with the `int` function.
+
+### toFloat
+
+Convert a value to a float.
+
+Example: `from(db: "telegraf") |> filter(fn:(r) => r._measurement == "mem" and r._field == "used") |> toFloat()`
+
+The function `toFloat` is defined as `toFloat = (table=<-) => table |> map(fn:(r) => float(v:r._value))`.
+If you need to convert other columns use the `map` function directly with the `float` function.
+
+### toDuration
+
+Convert a value to a duration.
+
+Example: `from(db: "telegraf") |> filter(fn:(r) => r._measurement == "mem" and r._field == "used") |> toDuration()`
+
+The function `toDuration` is defined as `toDuration = (table=<-) => table |> map(fn:(r) => duration(v:r._value))`.
+If you need to convert other columns use the `map` function directly with the `duration` function.
+
+### toString
+
+Convert a value to a string.
+
+Example: `from(db: "telegraf") |> filter(fn:(r) => r._measurement == "mem" and r._field == "used") |> toString()`
+
+The function `toString` is defined as `toString = (table=<-) => table |> map(fn:(r) => string(v:r._value))`.
+If you need to convert other columns use the `map` function directly with the `string` function.
+
+### toTime
+
+Convert a value to a time.
+
+Example: `from(db: "telegraf") |> filter(fn:(r) => r._measurement == "mem" and r._field == "used") |> toTime()`
+
+The function `toTime` is defined as `toTime = (table=<-) => table |> map(fn:(r) => time(v:r._value))`.
+If you need to convert other columns use the `map` function directly with the `time` function.
+
+### toUInt
+
+Convert a value to a uint.
+
+Example: `from(db: "telegraf") |> filter(fn:(r) => r._measurement == "mem" and r._field == "used") |> toUInt()`
+
+The function `toUInt` is defined as `toUInt = (table=<-) => table |> map(fn:(r) => uint(v:r._value))`.
+If you need to convert other columns use the `map` function directly with the `uint` function.
+
 
 #### window
 Partitions the results by a given time range

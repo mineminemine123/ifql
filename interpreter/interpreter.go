@@ -3,26 +3,19 @@ package interpreter
 import (
 	"fmt"
 	"regexp"
-	"strconv"
-	"time"
 
 	"github.com/influxdata/ifql/ast"
 	"github.com/influxdata/ifql/semantic"
+	"github.com/influxdata/ifql/values"
 	"github.com/pkg/errors"
 )
 
-func Eval(program *semantic.Program, scope *Scope, d Domain) error {
-	itrp := interpreter{
-		d: d,
-	}
+func Eval(program *semantic.Program, scope *Scope) error {
+	itrp := interpreter{}
 	return itrp.eval(program, scope)
 }
 
-// Domain represents any specific domain being used during evaluation.
-type Domain interface{}
-
 type interpreter struct {
-	d Domain
 }
 
 func (itrp interpreter) eval(program *semantic.Program, scope *Scope) error {
@@ -35,7 +28,7 @@ func (itrp interpreter) eval(program *semantic.Program, scope *Scope) error {
 }
 
 func (itrp interpreter) doStatement(stmt semantic.Statement, scope *Scope) error {
-	scope.SetReturn(value{t: semantic.Invalid})
+	scope.SetReturn(values.InvalidValue)
 	switch s := stmt.(type) {
 	case *semantic.NativeVariableDeclaration:
 		if err := itrp.doVariableDeclaration(s, scope); err != nil {
@@ -84,7 +77,7 @@ func (itrp interpreter) doVariableDeclaration(declaration *semantic.NativeVariab
 	return nil
 }
 
-func (itrp interpreter) doExpression(expr semantic.Expression, scope *Scope) (Value, error) {
+func (itrp interpreter) doExpression(expr semantic.Expression, scope *Scope) (values.Value, error) {
 	switch e := expr.(type) {
 	case semantic.Literal:
 		return itrp.doLiteral(e)
@@ -108,7 +101,11 @@ func (itrp interpreter) doExpression(expr semantic.Expression, scope *Scope) (Va
 		if err != nil {
 			return nil, err
 		}
-		return obj.Property(e.Property)
+		v, ok := obj.Object().Get(e.Property)
+		if !ok {
+			return nil, fmt.Errorf("object has no property %q", e.Property)
+		}
+		return v, nil
 	case *semantic.ObjectExpression:
 		return itrp.doObject(e, scope)
 	case *semantic.UnaryExpression:
@@ -121,15 +118,15 @@ func (itrp interpreter) doExpression(expr semantic.Expression, scope *Scope) (Va
 			if v.Type() != semantic.Bool {
 				return nil, fmt.Errorf("operand to unary expression is not a boolean value, got %v", v.Type())
 			}
-			return NewBoolValue(!v.Value().(bool)), nil
+			return values.NewBoolValue(!v.Bool()), nil
 		case ast.SubtractionOperator:
 			switch t := v.Type(); t {
 			case semantic.Int:
-				return NewIntValue(-v.Value().(int64)), nil
+				return values.NewIntValue(-v.Int()), nil
 			case semantic.Float:
-				return NewFloatValue(-v.Value().(float64)), nil
+				return values.NewFloatValue(-v.Float()), nil
 			case semantic.Duration:
-				return NewDurationValue(-v.Value().(time.Duration)), nil
+				return values.NewDurationValue(-v.Duration()), nil
 			default:
 				return nil, fmt.Errorf("operand to unary expression is not a number value, got %v", v.Type())
 			}
@@ -148,13 +145,13 @@ func (itrp interpreter) doExpression(expr semantic.Expression, scope *Scope) (Va
 			return nil, err
 		}
 
-		bf, ok := binaryFuncLookup[binaryFuncSignature{
-			operator: e.Operator,
-			left:     l.Type(),
-			right:    r.Type(),
-		}]
-		if !ok {
-			return nil, fmt.Errorf("unsupported binary operation: %v %v %v", l.Type(), e.Operator, r.Type())
+		bf, err := values.LookupBinaryFunction(values.BinaryFuncSignature{
+			Operator: e.Operator,
+			Left:     l.Type(),
+			Right:    r.Type(),
+		})
+		if err != nil {
+			return nil, err
 		}
 		return bf(l, r), nil
 	case *semantic.LogicalExpression:
@@ -165,14 +162,14 @@ func (itrp interpreter) doExpression(expr semantic.Expression, scope *Scope) (Va
 		if l.Type() != semantic.Bool {
 			return nil, fmt.Errorf("left operand to logcial expression is not a boolean value, got %v", l.Type())
 		}
-		left := l.Value().(bool)
+		left := l.Bool()
 
 		if e.Operator == ast.AndOperator && !left {
 			// Early return
-			return NewBoolValue(false), nil
+			return values.NewBoolValue(false), nil
 		} else if e.Operator == ast.OrOperator && left {
 			// Early return
-			return NewBoolValue(true), nil
+			return values.NewBoolValue(true), nil
 		}
 
 		r, err := itrp.doExpression(e.Right, scope)
@@ -182,33 +179,28 @@ func (itrp interpreter) doExpression(expr semantic.Expression, scope *Scope) (Va
 		if r.Type() != semantic.Bool {
 			return nil, errors.New("right operand to logcial expression is not a boolean value")
 		}
-		right := r.Value().(bool)
+		right := r.Bool()
 
 		switch e.Operator {
 		case ast.AndOperator:
-			return NewBoolValue(left && right), nil
+			return values.NewBoolValue(left && right), nil
 		case ast.OrOperator:
-			return NewBoolValue(left || right), nil
+			return values.NewBoolValue(left || right), nil
 		default:
 			return nil, fmt.Errorf("invalid logical operator %v", e.Operator)
 		}
 	case *semantic.FunctionExpression:
-		return value{
-			t: semantic.Function,
-			v: arrowFunc{
-				e:     e,
-				scope: scope.Nest(),
-			},
+		return function{
+			e:     e,
+			scope: scope.Nest(),
 		}, nil
 	default:
 		return nil, fmt.Errorf("unsupported expression %T", expr)
 	}
 }
 
-func (itrp interpreter) doArray(a *semantic.ArrayExpression, scope *Scope) (Value, error) {
-	array := Array{
-		Elements: make([]Value, len(a.Elements)),
-	}
+func (itrp interpreter) doArray(a *semantic.ArrayExpression, scope *Scope) (values.Value, error) {
+	elements := make([]values.Value, len(a.Elements))
 	elementType := semantic.EmptyArrayType.ElementType()
 	for i, el := range a.Elements {
 		v, err := itrp.doExpression(el, scope)
@@ -221,72 +213,44 @@ func (itrp interpreter) doArray(a *semantic.ArrayExpression, scope *Scope) (Valu
 		if elementType != v.Type() {
 			return nil, fmt.Errorf("cannot mix types in an array, found both %v and %v", elementType, v.Type())
 		}
-		array.Elements[i] = v
+		elements[i] = v
 	}
-	array.typ = semantic.NewArrayType(elementType)
-	return array, nil
+	return values.NewArrayWithBacking(elementType, elements), nil
 }
 
-func (itrp interpreter) doObject(m *semantic.ObjectExpression, scope *Scope) (Value, error) {
-	obj := Object{
-		Properties: make(map[string]Value, len(m.Properties)),
-	}
+func (itrp interpreter) doObject(m *semantic.ObjectExpression, scope *Scope) (values.Value, error) {
+	obj := values.NewObject()
 	for _, p := range m.Properties {
 		v, err := itrp.doExpression(p.Value, scope)
 		if err != nil {
 			return nil, err
 		}
-		if _, ok := obj.Properties[p.Key.Name]; ok {
+		if _, ok := obj.Get(p.Key.Name); ok {
 			return nil, fmt.Errorf("duplicate key in object: %q", p.Key.Name)
 		}
-		obj.Properties[p.Key.Name] = v
+		obj.Set(p.Key.Name, v)
 	}
 	return obj, nil
 }
 
-func (itrp interpreter) doLiteral(lit semantic.Literal) (Value, error) {
+func (itrp interpreter) doLiteral(lit semantic.Literal) (values.Value, error) {
 	switch l := lit.(type) {
 	case *semantic.DateTimeLiteral:
-		return value{
-			t: semantic.Time,
-			v: l.Value,
-		}, nil
+		return values.NewTimeValue(values.Time(l.Value.UnixNano())), nil
 	case *semantic.DurationLiteral:
-		return value{
-			t: semantic.Duration,
-			v: l.Value,
-		}, nil
+		return values.NewDurationValue(values.Duration(l.Value)), nil
 	case *semantic.FloatLiteral:
-		return value{
-			t: semantic.Float,
-			v: l.Value,
-		}, nil
+		return values.NewFloatValue(l.Value), nil
 	case *semantic.IntegerLiteral:
-		return value{
-			t: semantic.Int,
-			v: l.Value,
-		}, nil
+		return values.NewIntValue(l.Value), nil
 	case *semantic.UnsignedIntegerLiteral:
-		return value{
-			t: semantic.UInt,
-			v: l.Value,
-		}, nil
+		return values.NewUIntValue(l.Value), nil
 	case *semantic.StringLiteral:
-		return value{
-			t: semantic.String,
-			v: l.Value,
-		}, nil
+		return values.NewStringValue(l.Value), nil
 	case *semantic.RegexpLiteral:
-		return value{
-			t: semantic.Regexp,
-			v: l.Value,
-		}, nil
+		return values.NewRegexpValue(l.Value), nil
 	case *semantic.BooleanLiteral:
-		return value{
-			t: semantic.Bool,
-			v: l.Value,
-		}, nil
-	// semantic.TODO(nathanielc): Support lists and objects
+		return values.NewBoolValue(l.Value), nil
 	default:
 		return nil, fmt.Errorf("unknown literal type %T", lit)
 	}
@@ -303,69 +267,79 @@ func functionName(call *semantic.CallExpression) string {
 	}
 }
 
-func (itrp interpreter) doCall(call *semantic.CallExpression, scope *Scope) (Value, error) {
-	callee, err := itrp.doExpression(call.Callee, scope)
+func DoFunctionCall(f func(args Arguments) (values.Value, error), argsObj values.Object) (values.Value, error) {
+	args := NewArguments(argsObj)
+	v, err := f(args)
 	if err != nil {
 		return nil, err
 	}
-	if callee.Type() != semantic.Function {
-		return nil, fmt.Errorf("cannot call function, value is of type %v", callee.Type())
-	}
-	f := callee.Value().(Function)
-	arguments, err := itrp.doArguments(call.Arguments, scope)
-	if err != nil {
-		return nil, err
-	}
-
-	// Check if the function is an arrowFunc and rebind it.
-	if af, ok := f.(arrowFunc); ok {
-		af.itrp = itrp
-		f = af
-	}
-
-	// Call the function
-	v, err := f.Call(arguments, itrp.d)
-	if err != nil {
-		return nil, err
-	}
-	if unused := arguments.listUnused(); len(unused) > 0 {
-		return nil, fmt.Errorf("unused arguments %s", unused)
+	if unused := args.listUnused(); len(unused) > 0 {
+		return nil, fmt.Errorf("unused arguments %v", unused)
 	}
 	return v, nil
 }
 
-func (itrp interpreter) doArguments(args *semantic.ObjectExpression, scope *Scope) (Arguments, error) {
-	if args == nil || len(args.Properties) == 0 {
-		return newArguments(nil), nil
+func (itrp interpreter) doCall(call *semantic.CallExpression, scope *Scope) (values.Value, error) {
+	callee, err := itrp.doExpression(call.Callee, scope)
+	if err != nil {
+		return nil, err
 	}
-	paramsMap := make(map[string]Value, len(args.Properties))
+	if callee.Type().Kind() != semantic.Function {
+		return nil, fmt.Errorf("cannot call function, value is of type %v", callee.Type())
+	}
+	f := callee.Function()
+	argObj, err := itrp.doArguments(call.Arguments, scope)
+	if err != nil {
+		return nil, err
+	}
+
+	// Check if the function is an interpFunction and rebind it.
+	if af, ok := f.(function); ok {
+		af.itrp = itrp
+		f = af
+
+	}
+
+	// Call the function
+	return f.Call(argObj)
+}
+
+func (itrp interpreter) doArguments(args *semantic.ObjectExpression, scope *Scope) (values.Object, error) {
+	obj := values.NewObject()
+	if args == nil || len(args.Properties) == 0 {
+		return obj, nil
+	}
 	for _, p := range args.Properties {
 		value, err := itrp.doExpression(p.Value, scope)
 		if err != nil {
 			return nil, err
 		}
-		if _, ok := paramsMap[p.Key.Name]; ok {
+		if _, ok := obj.Get(p.Key.Name); ok {
 			return nil, fmt.Errorf("duplicate keyword parameter specified: %q", p.Key.Name)
 		}
-		paramsMap[p.Key.Name] = value
+		obj.Set(p.Key.Name, value)
 	}
-	return newArguments(paramsMap), nil
+	return obj, nil
 }
 
 type Scope struct {
 	parent      *Scope
-	values      map[string]Value
-	returnValue Value
+	values      map[string]values.Value
+	returnValue values.Value
 }
 
 func NewScope() *Scope {
 	return &Scope{
-		values:      make(map[string]Value),
-		returnValue: value{t: semantic.Invalid},
+		values: make(map[string]values.Value),
+	}
+}
+func NewScopeWithValues(values map[string]values.Value) *Scope {
+	return &Scope{
+		values: values,
 	}
 }
 
-func (s *Scope) Lookup(name string) (Value, bool) {
+func (s *Scope) Lookup(name string) (values.Value, bool) {
 	if s == nil {
 		return nil, false
 	}
@@ -376,17 +350,17 @@ func (s *Scope) Lookup(name string) (Value, bool) {
 	return v, ok
 }
 
-func (s *Scope) Set(name string, value Value) {
+func (s *Scope) Set(name string, value values.Value) {
 	s.values[name] = value
 }
 
 // SetReturn sets the return value of this scope.
-func (s *Scope) SetReturn(value Value) {
+func (s *Scope) SetReturn(value values.Value) {
 	s.returnValue = value
 }
 
 // Return reports the return value for this scope. If no return value has been set a value with type semantic.TInvalid is returned.
-func (s *Scope) Return() Value {
+func (s *Scope) Return() values.Value {
 	return s.returnValue
 }
 
@@ -424,6 +398,15 @@ func (s *Scope) Copy() *Scope {
 	return c
 }
 
+func (s *Scope) Range(f func(k string, v values.Value)) {
+	for k, v := range s.values {
+		f(k, v)
+	}
+	if s.parent != nil {
+		s.parent.Range(f)
+	}
+}
+
 // Value represents any value that can be the result of evaluating any expression.
 type Value interface {
 	// Type reports the type of value
@@ -431,7 +414,7 @@ type Value interface {
 	// Value returns the actual value represented.
 	Value() interface{}
 	// Property returns a new value which is a property of this value.
-	Property(name string) (Value, error)
+	Property(name string) (values.Value, error)
 }
 
 type value struct {
@@ -445,72 +428,71 @@ func (v value) Type() semantic.Type {
 func (v value) Value() interface{} {
 	return v.v
 }
-func (v value) Property(name string) (Value, error) {
+func (v value) Property(name string) (values.Value, error) {
 	return nil, fmt.Errorf("property %q does not exist", name)
 }
 func (v value) String() string {
 	return fmt.Sprintf("%v", v.v)
 }
 
-func NewBoolValue(v bool) Value {
-	return value{
-		t: semantic.Bool,
-		v: v,
-	}
-}
-func NewIntValue(v int64) Value {
-	return value{
-		t: semantic.Int,
-		v: v,
-	}
-}
-func NewUIntValue(v uint64) Value {
-	return value{
-		t: semantic.UInt,
-		v: v,
-	}
-}
-func NewFloatValue(v float64) Value {
-	return value{
-		t: semantic.Float,
-		v: v,
-	}
-}
-func NewStringValue(v string) Value {
-	return value{
-		t: semantic.String,
-		v: v,
-	}
-}
-func NewTimeValue(v time.Time) Value {
-	return value{
-		t: semantic.Time,
-		v: v,
-	}
-}
-func NewDurationValue(v time.Duration) Value {
-	return value{
-		t: semantic.Duration,
-		v: v,
-	}
-}
-
-// Function represents a callable type
-type Function interface {
-	Call(args Arguments, d Domain) (Value, error)
-	// Resolve rewrites the function resolving any identifiers not listed in the function params.
-	Resolve() (*semantic.FunctionExpression, error)
-}
-
-type arrowFunc struct {
+type function struct {
 	e     *semantic.FunctionExpression
 	scope *Scope
-	call  func(Arguments, Domain) (Value, error)
+	call  func(Arguments) (values.Value, error)
 
 	itrp interpreter
 }
 
-func (f arrowFunc) Call(args Arguments, d Domain) (Value, error) {
+func (f function) Type() semantic.Type {
+	return f.e.Type()
+}
+
+func (f function) Str() string {
+	panic(values.UnexpectedKind(semantic.Object, semantic.String))
+}
+func (f function) Int() int64 {
+	panic(values.UnexpectedKind(semantic.Object, semantic.Int))
+}
+func (f function) UInt() uint64 {
+	panic(values.UnexpectedKind(semantic.Object, semantic.UInt))
+}
+func (f function) Float() float64 {
+	panic(values.UnexpectedKind(semantic.Object, semantic.Float))
+}
+func (f function) Bool() bool {
+	panic(values.UnexpectedKind(semantic.Object, semantic.Bool))
+}
+func (f function) Time() values.Time {
+	panic(values.UnexpectedKind(semantic.Object, semantic.Time))
+}
+func (f function) Duration() values.Duration {
+	panic(values.UnexpectedKind(semantic.Object, semantic.Duration))
+}
+func (f function) Regexp() *regexp.Regexp {
+	panic(values.UnexpectedKind(semantic.Object, semantic.Regexp))
+}
+func (f function) Array() values.Array {
+	panic(values.UnexpectedKind(semantic.Object, semantic.Function))
+}
+func (f function) Object() values.Object {
+	panic(values.UnexpectedKind(semantic.Object, semantic.Object))
+}
+func (f function) Function() values.Function {
+	return f
+}
+
+func (f function) Call(argsObj values.Object) (values.Value, error) {
+	args := newArguments(argsObj)
+	v, err := f.doCall(args)
+	if err != nil {
+		return nil, err
+	}
+	if unused := args.listUnused(); len(unused) > 0 {
+		return nil, fmt.Errorf("unused arguments %s", unused)
+	}
+	return v, nil
+}
+func (f function) doCall(args Arguments) (values.Value, error) {
 	for _, p := range f.e.Params {
 		if p.Default == nil {
 			v, err := args.GetRequired(p.Key.Name)
@@ -541,25 +523,46 @@ func (f arrowFunc) Call(args Arguments, d Domain) (Value, error) {
 		}
 		v := f.scope.Return()
 		if v.Type() == semantic.Invalid {
-			return nil, errors.New("arrow function has no return value")
+			return nil, errors.New("function has no return value")
 		}
 		return v, nil
 	default:
-		return nil, fmt.Errorf("unsupported arrow function body type %T", f.e.Body)
+		return nil, fmt.Errorf("unsupported function body type %T", f.e.Body)
 	}
 }
 
+// Resolver represents a value that can resolve itself
+type Resolver interface {
+	Resolve() (semantic.Node, error)
+}
+
+func ResolveFunction(f values.Function) (*semantic.FunctionExpression, error) {
+	resolver, ok := f.(Resolver)
+	if !ok {
+		return nil, errors.New("function is not resolvable")
+	}
+	resolved, err := resolver.Resolve()
+	if err != nil {
+		return nil, err
+	}
+	fn, ok := resolved.(*semantic.FunctionExpression)
+	if !ok {
+		return nil, errors.New("resolved function is not a function")
+	}
+	return fn, nil
+}
+
 // Resolve rewrites the function resolving any identifiers not listed in the function params.
-func (f arrowFunc) Resolve() (*semantic.FunctionExpression, error) {
+func (f function) Resolve() (semantic.Node, error) {
 	n := f.e.Copy()
 	node, err := f.resolveIdentifiers(n)
 	if err != nil {
 		return nil, err
 	}
-	return node.(*semantic.FunctionExpression), nil
+	return node, nil
 }
 
-func (f arrowFunc) resolveIdentifiers(n semantic.Node) (semantic.Node, error) {
+func (f function) resolveIdentifiers(n semantic.Node) (semantic.Node, error) {
 	switch n := n.(type) {
 	case *semantic.IdentifierExpression:
 		for _, p := range f.e.Params {
@@ -684,139 +687,103 @@ func (f arrowFunc) resolveIdentifiers(n semantic.Node) (semantic.Node, error) {
 	return n, nil
 }
 
-func resolveValue(v Value) (semantic.Node, error) {
-	switch t := v.Type(); t {
+func resolveValue(v values.Value) (semantic.Node, error) {
+	switch k := v.Type().Kind(); k {
 	case semantic.String:
 		return &semantic.StringLiteral{
-			Value: v.Value().(string),
+			Value: v.Str(),
 		}, nil
 	case semantic.Int:
 		return &semantic.IntegerLiteral{
-			Value: v.Value().(int64),
+			Value: v.Int(),
 		}, nil
 	case semantic.UInt:
 		return &semantic.UnsignedIntegerLiteral{
-			Value: v.Value().(uint64),
+			Value: v.UInt(),
 		}, nil
 	case semantic.Float:
 		return &semantic.FloatLiteral{
-			Value: v.Value().(float64),
+			Value: v.Float(),
 		}, nil
 	case semantic.Bool:
 		return &semantic.BooleanLiteral{
-			Value: v.Value().(bool),
+			Value: v.Bool(),
 		}, nil
 	case semantic.Time:
 		return &semantic.DateTimeLiteral{
-			Value: v.Value().(time.Time),
+			Value: v.Time().Time(),
 		}, nil
 	case semantic.Regexp:
 		return &semantic.RegexpLiteral{
-			Value: v.Value().(*regexp.Regexp),
+			Value: v.Regexp(),
 		}, nil
 	case semantic.Duration:
 		return &semantic.DurationLiteral{
-			Value: v.Value().(time.Duration),
+			Value: v.Duration().Duration(),
 		}, nil
 	case semantic.Function:
-		return v.Value().(Function).Resolve()
+		resolver, ok := v.Function().(Resolver)
+		if !ok {
+			return nil, fmt.Errorf("function is not resolvable %T", v.Function())
+		}
+		return resolver.Resolve()
 	case semantic.Array:
-		arr := v.Value().(Array)
+		arr := v.Array()
 		node := new(semantic.ArrayExpression)
-		node.Elements = make([]semantic.Expression, len(arr.Elements))
-		for i, el := range arr.Elements {
-			n, err := resolveValue(el)
+		node.Elements = make([]semantic.Expression, arr.Len())
+		var err error
+		arr.Range(func(i int, el values.Value) {
 			if err != nil {
-				return nil, err
+				return
+			}
+			var n semantic.Node
+			n, err = resolveValue(el)
+			if err != nil {
+				return
 			}
 			node.Elements[i] = n.(semantic.Expression)
+		})
+		if err != nil {
+			return nil, err
 		}
 		return node, nil
 	case semantic.Object:
-		m := v.Value().(Object)
+		obj := v.Object()
 		node := new(semantic.ObjectExpression)
-		node.Properties = make([]*semantic.Property, 0, len(m.Properties))
-		for k, el := range m.Properties {
-			n, err := resolveValue(el)
+		node.Properties = make([]*semantic.Property, 0, obj.Len())
+		var err error
+		obj.Range(func(k string, v values.Value) {
 			if err != nil {
-				return nil, err
+				return
+			}
+			var n semantic.Node
+			n, err = resolveValue(v)
+			if err != nil {
+				return
 			}
 			node.Properties = append(node.Properties, &semantic.Property{
 				Key:   &semantic.Identifier{Name: k},
 				Value: n.(semantic.Expression),
 			})
+		})
+		if err != nil {
+			return nil, err
 		}
 		return node, nil
 	default:
-		return nil, fmt.Errorf("cannot resove value of type %v", t)
+		return nil, fmt.Errorf("cannot resove value of type %v", k)
 	}
 }
 
-// Array represents an sequence of elements
-// All elements must be the same type
-type Array struct {
-	Elements []Value
-	typ      semantic.Type
-}
-
-func NewArray(elementType semantic.Type) Array {
-	return Array{
-		typ: semantic.NewArrayType(elementType),
+func ToStringArray(a values.Array) ([]string, error) {
+	if a.Type().ElementType() != semantic.String {
+		return nil, fmt.Errorf("cannot convert array of %v to an array of strings", a.Type().ElementType())
 	}
-}
-
-func (a Array) Type() semantic.Type {
-	return a.typ
-}
-
-func (a Array) Value() interface{} {
-	return a
-}
-
-func (a Array) Property(name string) (Value, error) {
-	i, err := strconv.Atoi(name)
-	if err != nil {
-		return nil, err
-	}
-	if i < 0 || i >= len(a.Elements) {
-		return nil, fmt.Errorf("out of bounds index %d, length: %d", i, len(a.Elements))
-	}
-	return a.Elements[i], nil
-}
-
-func (a Array) AsStrings() []string {
-	if a.typ.ElementType() != semantic.String {
-		return nil
-	}
-	strs := make([]string, len(a.Elements))
-	for i, v := range a.Elements {
-		strs[i] = v.Value().(string)
-	}
-	return strs
-}
-
-// Object represents an association of keys to values.
-// Object values may be of any type.
-type Object struct {
-	Properties map[string]Value
-}
-
-func (m Object) Type() semantic.Type {
-	propertyTypes := make(map[string]semantic.Type)
-	for k, v := range m.Properties {
-		propertyTypes[k] = v.Type()
-	}
-	return semantic.NewObjectType(propertyTypes)
-}
-func (m Object) Value() interface{} {
-	return m
-}
-func (m Object) Property(name string) (Value, error) {
-	v, ok := m.Properties[name]
-	if ok {
-		return v, nil
-	}
-	return nil, fmt.Errorf("property %q does not exist", name)
+	strs := make([]string, a.Len())
+	a.Range(func(i int, v values.Value) {
+		strs[i] = v.Str()
+	})
+	return strs, nil
 }
 
 // Arguments provides access to the keyword arguments passed to a function.
@@ -824,50 +791,53 @@ func (m Object) Property(name string) (Value, error) {
 // whether the argument was specified and any errors about the argument type.
 // semantic.The GetRequired{Type} methods return only two values, the typed value of the arg and any errors, a missing argument is considered an error in this case.
 type Arguments interface {
-	Get(name string) (Value, bool)
-	GetRequired(name string) (Value, error)
+	Get(name string) (values.Value, bool)
+	GetRequired(name string) (values.Value, error)
 
 	GetString(name string) (string, bool, error)
 	GetInt(name string) (int64, bool, error)
 	GetFloat(name string) (float64, bool, error)
 	GetBool(name string) (bool, bool, error)
-	GetFunction(name string) (Function, bool, error)
-	GetArray(name string, t semantic.Kind) (Array, bool, error)
-	GetObject(name string) (Object, bool, error)
+	GetFunction(name string) (values.Function, bool, error)
+	GetArray(name string, t semantic.Kind) (values.Array, bool, error)
+	GetObject(name string) (values.Object, bool, error)
 
 	GetRequiredString(name string) (string, error)
 	GetRequiredInt(name string) (int64, error)
 	GetRequiredFloat(name string) (float64, error)
 	GetRequiredBool(name string) (bool, error)
-	GetRequiredFunction(name string) (Function, error)
-	GetRequiredArray(name string, t semantic.Kind) (Array, error)
-	GetRequiredObject(name string) (Object, error)
+	GetRequiredFunction(name string) (values.Function, error)
+	GetRequiredArray(name string, t semantic.Kind) (values.Array, error)
+	GetRequiredObject(name string) (values.Object, error)
 
 	// listUnused returns the list of provided arguments that were not used by the function.
 	listUnused() []string
 }
 
 type arguments struct {
-	params map[string]Value
-	used   map[string]bool
+	obj  values.Object
+	used map[string]bool
 }
 
-func newArguments(params map[string]Value) *arguments {
+func newArguments(obj values.Object) *arguments {
 	return &arguments{
-		params: params,
-		used:   make(map[string]bool, len(params)),
+		obj:  obj,
+		used: make(map[string]bool, obj.Len()),
 	}
 }
+func NewArguments(obj values.Object) Arguments {
+	return newArguments(obj)
+}
 
-func (a *arguments) Get(name string) (Value, bool) {
+func (a *arguments) Get(name string) (values.Value, bool) {
 	a.used[name] = true
-	v, ok := a.params[name]
+	v, ok := a.obj.Get(name)
 	return v, ok
 }
 
-func (a *arguments) GetRequired(name string) (Value, error) {
+func (a *arguments) GetRequired(name string) (values.Value, error) {
 	a.used[name] = true
-	v, ok := a.params[name]
+	v, ok := a.obj.Get(name)
 	if !ok {
 		return nil, fmt.Errorf("missing required keyword argument %q", name)
 	}
@@ -879,113 +849,113 @@ func (a *arguments) GetString(name string) (string, bool, error) {
 	if err != nil || !ok {
 		return "", ok, err
 	}
-	return v.Value().(string), ok, nil
+	return v.Str(), ok, nil
 }
 func (a *arguments) GetRequiredString(name string) (string, error) {
 	v, _, err := a.get(name, semantic.String, true)
 	if err != nil {
 		return "", err
 	}
-	return v.Value().(string), nil
+	return v.Str(), nil
 }
 func (a *arguments) GetInt(name string) (int64, bool, error) {
 	v, ok, err := a.get(name, semantic.Int, false)
 	if err != nil || !ok {
 		return 0, ok, err
 	}
-	return v.Value().(int64), ok, nil
+	return v.Int(), ok, nil
 }
 func (a *arguments) GetRequiredInt(name string) (int64, error) {
 	v, _, err := a.get(name, semantic.Int, true)
 	if err != nil {
 		return 0, err
 	}
-	return v.Value().(int64), nil
+	return v.Int(), nil
 }
 func (a *arguments) GetFloat(name string) (float64, bool, error) {
 	v, ok, err := a.get(name, semantic.Float, false)
 	if err != nil || !ok {
 		return 0, ok, err
 	}
-	return v.Value().(float64), ok, nil
+	return v.Float(), ok, nil
 }
 func (a *arguments) GetRequiredFloat(name string) (float64, error) {
 	v, _, err := a.get(name, semantic.Float, true)
 	if err != nil {
 		return 0, err
 	}
-	return v.Value().(float64), nil
+	return v.Float(), nil
 }
 func (a *arguments) GetBool(name string) (bool, bool, error) {
 	v, ok, err := a.get(name, semantic.Bool, false)
 	if err != nil || !ok {
 		return false, ok, err
 	}
-	return v.Value().(bool), ok, nil
+	return v.Bool(), ok, nil
 }
 func (a *arguments) GetRequiredBool(name string) (bool, error) {
 	v, _, err := a.get(name, semantic.Bool, true)
 	if err != nil {
 		return false, err
 	}
-	return v.Value().(bool), nil
+	return v.Bool(), nil
 }
 
-func (a *arguments) GetArray(name string, t semantic.Kind) (Array, bool, error) {
+func (a *arguments) GetArray(name string, t semantic.Kind) (values.Array, bool, error) {
 	v, ok, err := a.get(name, semantic.Array, false)
 	if err != nil || !ok {
-		return Array{}, ok, err
+		return nil, ok, err
 	}
-	arr := v.Value().(Array)
+	arr := v.Array()
 	if arr.Type().ElementType() != t {
-		return Array{}, true, fmt.Errorf("keyword argument %q should be of an array of type %v, but got an array of type %v", name, t, arr.Type())
+		return nil, true, fmt.Errorf("keyword argument %q should be of an array of type %v, but got an array of type %v", name, t, arr.Type())
 	}
-	return v.Value().(Array), ok, nil
+	return v.Array(), ok, nil
 }
-func (a *arguments) GetRequiredArray(name string, t semantic.Kind) (Array, error) {
+func (a *arguments) GetRequiredArray(name string, t semantic.Kind) (values.Array, error) {
 	v, _, err := a.get(name, semantic.Array, true)
 	if err != nil {
-		return Array{}, err
+		return nil, err
 	}
-	arr := v.Value().(Array)
+	arr := v.Array()
 	if arr.Type().ElementType() != t {
-		return Array{}, fmt.Errorf("keyword argument %q should be of an array of type %v, but got an array of type %v", name, t, arr.Type())
+		return nil, fmt.Errorf("keyword argument %q should be of an array of type %v, but got an array of type %v", name, t, arr.Type())
 	}
 	return arr, nil
 }
-func (a *arguments) GetFunction(name string) (Function, bool, error) {
+func (a *arguments) GetFunction(name string) (values.Function, bool, error) {
 	v, ok, err := a.get(name, semantic.Function, false)
 	if err != nil || !ok {
 		return nil, ok, err
 	}
-	return v.Value().(Function), ok, nil
+	return v.Function(), ok, nil
 }
-func (a *arguments) GetRequiredFunction(name string) (Function, error) {
+func (a *arguments) GetRequiredFunction(name string) (values.Function, error) {
 	v, _, err := a.get(name, semantic.Function, true)
 	if err != nil {
 		return nil, err
 	}
-	return v.Value().(Function), nil
+	return v.Function(), nil
 }
 
-func (a *arguments) GetObject(name string) (Object, bool, error) {
+func (a *arguments) GetObject(name string) (values.Object, bool, error) {
 	v, ok, err := a.get(name, semantic.Object, false)
 	if err != nil || !ok {
-		return Object{}, ok, err
+		return nil, ok, err
 	}
-	return v.Value().(Object), ok, nil
+	return v.Object(), ok, nil
 }
-func (a *arguments) GetRequiredObject(name string) (Object, error) {
+func (a *arguments) GetRequiredObject(name string) (values.Object, error) {
 	v, _, err := a.get(name, semantic.Object, true)
 	if err != nil {
-		return Object{}, err
+		return nil, err
 	}
-	return v.Value().(Object), nil
+	return v.Object(), nil
 }
 
-func (a *arguments) get(name string, kind semantic.Kind, required bool) (Value, bool, error) {
+func (a *arguments) get(name string, kind semantic.Kind, required bool) (values.Value, bool, error) {
 	a.used[name] = true
-	v, ok := a.params[name]
+	v, ok := a.obj.Get(name)
 	if !ok {
 		if required {
 			return nil, false, fmt.Errorf("missing required keyword argument %q", name)
@@ -1000,442 +970,10 @@ func (a *arguments) get(name string, kind semantic.Kind, required bool) (Value, 
 
 func (a *arguments) listUnused() []string {
 	var unused []string
-	for k := range a.params {
+	a.obj.Range(func(k string, v values.Value) {
 		if !a.used[k] {
 			unused = append(unused, k)
 		}
-	}
-
+	})
 	return unused
-}
-
-type binaryFunc func(l, r Value) Value
-
-type binaryFuncSignature struct {
-	operator    ast.OperatorKind
-	left, right semantic.Type
-}
-
-var binaryFuncLookup = map[binaryFuncSignature]binaryFunc{
-	//---------------
-	// Math Operators
-	//---------------
-	{operator: ast.AdditionOperator, left: semantic.Int, right: semantic.Int}: func(lv, rv Value) Value {
-		l := lv.Value().(int64)
-		r := rv.Value().(int64)
-		return NewIntValue(l + r)
-	},
-	{operator: ast.AdditionOperator, left: semantic.UInt, right: semantic.UInt}: func(lv, rv Value) Value {
-		l := lv.Value().(uint64)
-		r := rv.Value().(uint64)
-		return NewUIntValue(l + r)
-	},
-	{operator: ast.AdditionOperator, left: semantic.Float, right: semantic.Float}: func(lv, rv Value) Value {
-		l := lv.Value().(float64)
-		r := rv.Value().(float64)
-		return NewFloatValue(l + r)
-	},
-	{operator: ast.SubtractionOperator, left: semantic.Int, right: semantic.Int}: func(lv, rv Value) Value {
-		l := lv.Value().(int64)
-		r := rv.Value().(int64)
-		return NewIntValue(l - r)
-	},
-	{operator: ast.SubtractionOperator, left: semantic.UInt, right: semantic.UInt}: func(lv, rv Value) Value {
-		l := lv.Value().(uint64)
-		r := rv.Value().(uint64)
-		return NewUIntValue(l - r)
-	},
-	{operator: ast.SubtractionOperator, left: semantic.Float, right: semantic.Float}: func(lv, rv Value) Value {
-		l := lv.Value().(float64)
-		r := rv.Value().(float64)
-		return NewFloatValue(l - r)
-	},
-	{operator: ast.MultiplicationOperator, left: semantic.Int, right: semantic.Int}: func(lv, rv Value) Value {
-		l := lv.Value().(int64)
-		r := rv.Value().(int64)
-		return NewIntValue(l * r)
-	},
-	{operator: ast.MultiplicationOperator, left: semantic.UInt, right: semantic.UInt}: func(lv, rv Value) Value {
-		l := lv.Value().(uint64)
-		r := rv.Value().(uint64)
-		return NewUIntValue(l * r)
-	},
-	{operator: ast.MultiplicationOperator, left: semantic.Float, right: semantic.Float}: func(lv, rv Value) Value {
-		l := lv.Value().(float64)
-		r := rv.Value().(float64)
-		return NewFloatValue(l * r)
-	},
-	{operator: ast.DivisionOperator, left: semantic.Int, right: semantic.Int}: func(lv, rv Value) Value {
-		l := lv.Value().(int64)
-		r := rv.Value().(int64)
-		return NewIntValue(l / r)
-	},
-	{operator: ast.DivisionOperator, left: semantic.UInt, right: semantic.UInt}: func(lv, rv Value) Value {
-		l := lv.Value().(uint64)
-		r := rv.Value().(uint64)
-		return NewUIntValue(l / r)
-	},
-	{operator: ast.DivisionOperator, left: semantic.Float, right: semantic.Float}: func(lv, rv Value) Value {
-		l := lv.Value().(float64)
-		r := rv.Value().(float64)
-		return NewFloatValue(l / r)
-	},
-
-	//---------------------
-	// Comparison Operators
-	//---------------------
-
-	// LessThanEqualOperator
-
-	{operator: ast.LessThanEqualOperator, left: semantic.Int, right: semantic.Int}: func(lv, rv Value) Value {
-		l := lv.Value().(int64)
-		r := rv.Value().(int64)
-		return NewBoolValue(l <= r)
-	},
-	{operator: ast.LessThanEqualOperator, left: semantic.Int, right: semantic.UInt}: func(lv, rv Value) Value {
-		l := lv.Value().(int64)
-		r := rv.Value().(uint64)
-		if l < 0 {
-			return NewBoolValue(true)
-		}
-		return NewBoolValue(uint64(l) <= r)
-	},
-	{operator: ast.LessThanEqualOperator, left: semantic.Int, right: semantic.Float}: func(lv, rv Value) Value {
-		l := lv.Value().(int64)
-		r := rv.Value().(float64)
-		return NewBoolValue(float64(l) <= r)
-	},
-	{operator: ast.LessThanEqualOperator, left: semantic.UInt, right: semantic.Int}: func(lv, rv Value) Value {
-		l := lv.Value().(uint64)
-		r := rv.Value().(int64)
-		if r < 0 {
-			return NewBoolValue(false)
-		}
-		return NewBoolValue(l <= uint64(r))
-	},
-	{operator: ast.LessThanEqualOperator, left: semantic.UInt, right: semantic.UInt}: func(lv, rv Value) Value {
-		l := lv.Value().(uint64)
-		r := rv.Value().(uint64)
-		return NewBoolValue(l <= r)
-	},
-	{operator: ast.LessThanEqualOperator, left: semantic.UInt, right: semantic.Float}: func(lv, rv Value) Value {
-		l := lv.Value().(uint64)
-		r := rv.Value().(float64)
-		return NewBoolValue(float64(l) <= r)
-	},
-	{operator: ast.LessThanEqualOperator, left: semantic.Float, right: semantic.Int}: func(lv, rv Value) Value {
-		l := lv.Value().(float64)
-		r := rv.Value().(int64)
-		return NewBoolValue(l <= float64(r))
-	},
-	{operator: ast.LessThanEqualOperator, left: semantic.Float, right: semantic.UInt}: func(lv, rv Value) Value {
-		l := lv.Value().(float64)
-		r := rv.Value().(uint64)
-		return NewBoolValue(l <= float64(r))
-	},
-	{operator: ast.LessThanEqualOperator, left: semantic.Float, right: semantic.Float}: func(lv, rv Value) Value {
-		l := lv.Value().(float64)
-		r := rv.Value().(float64)
-		return NewBoolValue(l <= r)
-	},
-
-	// LessThanOperator
-
-	{operator: ast.LessThanOperator, left: semantic.Int, right: semantic.Int}: func(lv, rv Value) Value {
-		l := lv.Value().(int64)
-		r := rv.Value().(int64)
-		return NewBoolValue(l < r)
-	},
-	{operator: ast.LessThanOperator, left: semantic.Int, right: semantic.UInt}: func(lv, rv Value) Value {
-		l := lv.Value().(int64)
-		r := rv.Value().(uint64)
-		if l < 0 {
-			return NewBoolValue(true)
-		}
-		return NewBoolValue(uint64(l) < r)
-	},
-	{operator: ast.LessThanOperator, left: semantic.Int, right: semantic.Float}: func(lv, rv Value) Value {
-		l := lv.Value().(int64)
-		r := rv.Value().(float64)
-		return NewBoolValue(float64(l) < r)
-	},
-	{operator: ast.LessThanOperator, left: semantic.UInt, right: semantic.Int}: func(lv, rv Value) Value {
-		l := lv.Value().(uint64)
-		r := rv.Value().(int64)
-		if r < 0 {
-			return NewBoolValue(false)
-		}
-		return NewBoolValue(l < uint64(r))
-	},
-	{operator: ast.LessThanOperator, left: semantic.UInt, right: semantic.UInt}: func(lv, rv Value) Value {
-		l := lv.Value().(uint64)
-		r := rv.Value().(uint64)
-		return NewBoolValue(l < r)
-	},
-	{operator: ast.LessThanOperator, left: semantic.UInt, right: semantic.Float}: func(lv, rv Value) Value {
-		l := lv.Value().(uint64)
-		r := rv.Value().(float64)
-		return NewBoolValue(float64(l) < r)
-	},
-	{operator: ast.LessThanOperator, left: semantic.Float, right: semantic.Int}: func(lv, rv Value) Value {
-		l := lv.Value().(float64)
-		r := rv.Value().(int64)
-		return NewBoolValue(l < float64(r))
-	},
-	{operator: ast.LessThanOperator, left: semantic.Float, right: semantic.UInt}: func(lv, rv Value) Value {
-		l := lv.Value().(float64)
-		r := rv.Value().(uint64)
-		return NewBoolValue(l < float64(r))
-	},
-	{operator: ast.LessThanOperator, left: semantic.Float, right: semantic.Float}: func(lv, rv Value) Value {
-		l := lv.Value().(float64)
-		r := rv.Value().(float64)
-		return NewBoolValue(l < r)
-	},
-
-	// GreaterThanEqualOperator
-
-	{operator: ast.GreaterThanEqualOperator, left: semantic.Int, right: semantic.Int}: func(lv, rv Value) Value {
-		l := lv.Value().(int64)
-		r := rv.Value().(int64)
-		return NewBoolValue(l >= r)
-	},
-	{operator: ast.GreaterThanEqualOperator, left: semantic.Int, right: semantic.UInt}: func(lv, rv Value) Value {
-		l := lv.Value().(int64)
-		r := rv.Value().(uint64)
-		if l < 0 {
-			return NewBoolValue(true)
-		}
-		return NewBoolValue(uint64(l) >= r)
-	},
-	{operator: ast.GreaterThanEqualOperator, left: semantic.Int, right: semantic.Float}: func(lv, rv Value) Value {
-		l := lv.Value().(int64)
-		r := rv.Value().(float64)
-		return NewBoolValue(float64(l) >= r)
-	},
-	{operator: ast.GreaterThanEqualOperator, left: semantic.UInt, right: semantic.Int}: func(lv, rv Value) Value {
-		l := lv.Value().(uint64)
-		r := rv.Value().(int64)
-		if r < 0 {
-			return NewBoolValue(false)
-		}
-		return NewBoolValue(l >= uint64(r))
-	},
-	{operator: ast.GreaterThanEqualOperator, left: semantic.UInt, right: semantic.UInt}: func(lv, rv Value) Value {
-		l := lv.Value().(uint64)
-		r := rv.Value().(uint64)
-		return NewBoolValue(l >= r)
-	},
-	{operator: ast.GreaterThanEqualOperator, left: semantic.UInt, right: semantic.Float}: func(lv, rv Value) Value {
-		l := lv.Value().(uint64)
-		r := rv.Value().(float64)
-		return NewBoolValue(float64(l) >= r)
-	},
-	{operator: ast.GreaterThanEqualOperator, left: semantic.Float, right: semantic.Int}: func(lv, rv Value) Value {
-		l := lv.Value().(float64)
-		r := rv.Value().(int64)
-		return NewBoolValue(l >= float64(r))
-	},
-	{operator: ast.GreaterThanEqualOperator, left: semantic.Float, right: semantic.UInt}: func(lv, rv Value) Value {
-		l := lv.Value().(float64)
-		r := rv.Value().(uint64)
-		return NewBoolValue(l >= float64(r))
-	},
-	{operator: ast.GreaterThanEqualOperator, left: semantic.Float, right: semantic.Float}: func(lv, rv Value) Value {
-		l := lv.Value().(float64)
-		r := rv.Value().(float64)
-		return NewBoolValue(l >= r)
-	},
-
-	// GreaterThanOperator
-
-	{operator: ast.GreaterThanOperator, left: semantic.Int, right: semantic.Int}: func(lv, rv Value) Value {
-		l := lv.Value().(int64)
-		r := rv.Value().(int64)
-		return NewBoolValue(l > r)
-	},
-	{operator: ast.GreaterThanOperator, left: semantic.Int, right: semantic.UInt}: func(lv, rv Value) Value {
-		l := lv.Value().(int64)
-		r := rv.Value().(uint64)
-		if l < 0 {
-			return NewBoolValue(true)
-		}
-		return NewBoolValue(uint64(l) > r)
-	},
-	{operator: ast.GreaterThanOperator, left: semantic.Int, right: semantic.Float}: func(lv, rv Value) Value {
-		l := lv.Value().(int64)
-		r := rv.Value().(float64)
-		return NewBoolValue(float64(l) > r)
-	},
-	{operator: ast.GreaterThanOperator, left: semantic.UInt, right: semantic.Int}: func(lv, rv Value) Value {
-		l := lv.Value().(uint64)
-		r := rv.Value().(int64)
-		if r < 0 {
-			return NewBoolValue(false)
-		}
-		return NewBoolValue(l > uint64(r))
-	},
-	{operator: ast.GreaterThanOperator, left: semantic.UInt, right: semantic.UInt}: func(lv, rv Value) Value {
-		l := lv.Value().(uint64)
-		r := rv.Value().(uint64)
-		return NewBoolValue(l > r)
-	},
-	{operator: ast.GreaterThanOperator, left: semantic.UInt, right: semantic.Float}: func(lv, rv Value) Value {
-		l := lv.Value().(uint64)
-		r := rv.Value().(float64)
-		return NewBoolValue(float64(l) > r)
-	},
-	{operator: ast.GreaterThanOperator, left: semantic.Float, right: semantic.Int}: func(lv, rv Value) Value {
-		l := lv.Value().(float64)
-		r := rv.Value().(int64)
-		return NewBoolValue(l > float64(r))
-	},
-	{operator: ast.GreaterThanOperator, left: semantic.Float, right: semantic.UInt}: func(lv, rv Value) Value {
-		l := lv.Value().(float64)
-		r := rv.Value().(uint64)
-		return NewBoolValue(l > float64(r))
-	},
-	{operator: ast.GreaterThanOperator, left: semantic.Float, right: semantic.Float}: func(lv, rv Value) Value {
-		l := lv.Value().(float64)
-		r := rv.Value().(float64)
-		return NewBoolValue(l > r)
-	},
-
-	// EqualOperator
-
-	{operator: ast.EqualOperator, left: semantic.Int, right: semantic.Int}: func(lv, rv Value) Value {
-		l := lv.Value().(int64)
-		r := rv.Value().(int64)
-		return NewBoolValue(l == r)
-	},
-	{operator: ast.EqualOperator, left: semantic.Int, right: semantic.UInt}: func(lv, rv Value) Value {
-		l := lv.Value().(int64)
-		r := rv.Value().(uint64)
-		if l < 0 {
-			return NewBoolValue(false)
-		}
-		return NewBoolValue(uint64(l) == r)
-	},
-	{operator: ast.EqualOperator, left: semantic.Int, right: semantic.Float}: func(lv, rv Value) Value {
-		l := lv.Value().(int64)
-		r := rv.Value().(float64)
-		return NewBoolValue(float64(l) == r)
-	},
-	{operator: ast.EqualOperator, left: semantic.UInt, right: semantic.Int}: func(lv, rv Value) Value {
-		l := lv.Value().(uint64)
-		r := rv.Value().(int64)
-		if r < 0 {
-			return NewBoolValue(false)
-		}
-		return NewBoolValue(l == uint64(r))
-	},
-	{operator: ast.EqualOperator, left: semantic.UInt, right: semantic.UInt}: func(lv, rv Value) Value {
-		l := lv.Value().(uint64)
-		r := rv.Value().(uint64)
-		return NewBoolValue(l == r)
-	},
-	{operator: ast.EqualOperator, left: semantic.UInt, right: semantic.Float}: func(lv, rv Value) Value {
-		l := lv.Value().(uint64)
-		r := rv.Value().(float64)
-		return NewBoolValue(float64(l) == r)
-	},
-	{operator: ast.EqualOperator, left: semantic.Float, right: semantic.Int}: func(lv, rv Value) Value {
-		l := lv.Value().(float64)
-		r := rv.Value().(int64)
-		return NewBoolValue(l == float64(r))
-	},
-	{operator: ast.EqualOperator, left: semantic.Float, right: semantic.UInt}: func(lv, rv Value) Value {
-		l := lv.Value().(float64)
-		r := rv.Value().(uint64)
-		return NewBoolValue(l == float64(r))
-	},
-	{operator: ast.EqualOperator, left: semantic.Float, right: semantic.Float}: func(lv, rv Value) Value {
-		l := lv.Value().(float64)
-		r := rv.Value().(float64)
-		return NewBoolValue(l == r)
-	},
-	{operator: ast.EqualOperator, left: semantic.String, right: semantic.String}: func(lv, rv Value) Value {
-		l := lv.Value().(string)
-		r := rv.Value().(string)
-		return NewBoolValue(l == r)
-	},
-
-	// NotEqualOperator
-
-	{operator: ast.NotEqualOperator, left: semantic.Int, right: semantic.Int}: func(lv, rv Value) Value {
-		l := lv.Value().(int64)
-		r := rv.Value().(int64)
-		return NewBoolValue(l != r)
-	},
-	{operator: ast.NotEqualOperator, left: semantic.Int, right: semantic.UInt}: func(lv, rv Value) Value {
-		l := lv.Value().(int64)
-		r := rv.Value().(uint64)
-		if l < 0 {
-			return NewBoolValue(true)
-		}
-		return NewBoolValue(uint64(l) != r)
-	},
-	{operator: ast.NotEqualOperator, left: semantic.Int, right: semantic.Float}: func(lv, rv Value) Value {
-		l := lv.Value().(int64)
-		r := rv.Value().(float64)
-		return NewBoolValue(float64(l) != r)
-	},
-	{operator: ast.NotEqualOperator, left: semantic.UInt, right: semantic.Int}: func(lv, rv Value) Value {
-		l := lv.Value().(uint64)
-		r := rv.Value().(int64)
-		if r < 0 {
-			return NewBoolValue(true)
-		}
-		return NewBoolValue(l != uint64(r))
-	},
-	{operator: ast.NotEqualOperator, left: semantic.UInt, right: semantic.UInt}: func(lv, rv Value) Value {
-		l := lv.Value().(uint64)
-		r := rv.Value().(uint64)
-		return NewBoolValue(l != r)
-	},
-	{operator: ast.NotEqualOperator, left: semantic.UInt, right: semantic.Float}: func(lv, rv Value) Value {
-		l := lv.Value().(uint64)
-		r := rv.Value().(float64)
-		return NewBoolValue(float64(l) != r)
-	},
-	{operator: ast.NotEqualOperator, left: semantic.Float, right: semantic.Int}: func(lv, rv Value) Value {
-		l := lv.Value().(float64)
-		r := rv.Value().(int64)
-		return NewBoolValue(l != float64(r))
-	},
-	{operator: ast.NotEqualOperator, left: semantic.Float, right: semantic.UInt}: func(lv, rv Value) Value {
-		l := lv.Value().(float64)
-		r := rv.Value().(uint64)
-		return NewBoolValue(l != float64(r))
-	},
-	{operator: ast.NotEqualOperator, left: semantic.Float, right: semantic.Float}: func(lv, rv Value) Value {
-		l := lv.Value().(float64)
-		r := rv.Value().(float64)
-		return NewBoolValue(l != r)
-	},
-	{operator: ast.NotEqualOperator, left: semantic.String, right: semantic.String}: func(lv, rv Value) Value {
-		l := lv.Value().(string)
-		r := rv.Value().(string)
-		return NewBoolValue(l != r)
-	},
-	{operator: ast.RegexpMatchOperator, left: semantic.String, right: semantic.Regexp}: func(lv, rv Value) Value {
-		l := lv.Value().(string)
-		r := rv.Value().(*regexp.Regexp)
-		return NewBoolValue(r.MatchString(l))
-	},
-	{operator: ast.RegexpMatchOperator, left: semantic.Regexp, right: semantic.String}: func(lv, rv Value) Value {
-		l := lv.Value().(*regexp.Regexp)
-		r := rv.Value().(string)
-		return NewBoolValue(l.MatchString(r))
-	},
-	{operator: ast.NotRegexpMatchOperator, left: semantic.String, right: semantic.Regexp}: func(lv, rv Value) Value {
-		l := lv.Value().(string)
-		r := rv.Value().(*regexp.Regexp)
-		return NewBoolValue(!r.MatchString(l))
-	},
-	{operator: ast.NotRegexpMatchOperator, left: semantic.Regexp, right: semantic.String}: func(lv, rv Value) Value {
-		l := lv.Value().(*regexp.Regexp)
-		r := rv.Value().(string)
-		return NewBoolValue(!l.MatchString(r))
-	},
 }

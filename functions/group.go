@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"sort"
 
+	"github.com/influxdata/ifql/interpreter"
 	"github.com/influxdata/ifql/query"
 	"github.com/influxdata/ifql/query/execute"
 	"github.com/influxdata/ifql/query/plan"
@@ -42,17 +43,26 @@ func createGroupOpSpec(args query.Arguments, a *query.Administration) (query.Ope
 	if array, ok, err := args.GetArray("by", semantic.String); err != nil {
 		return nil, err
 	} else if ok {
-		spec.By = array.AsStrings()
+		spec.By, err = interpreter.ToStringArray(array)
+		if err != nil {
+			return nil, err
+		}
 	}
 	if array, ok, err := args.GetArray("keep", semantic.String); err != nil {
 		return nil, err
 	} else if ok {
-		spec.Keep = array.AsStrings()
+		spec.Keep, err = interpreter.ToStringArray(array)
+		if err != nil {
+			return nil, err
+		}
 	}
 	if array, ok, err := args.GetArray("except", semantic.String); err != nil {
 		return nil, err
 	} else if ok {
-		spec.Except = array.AsStrings()
+		spec.Except, err = interpreter.ToStringArray(array)
+		if err != nil {
+			return nil, err
+		}
 	}
 
 	if len(spec.By) > 0 && len(spec.Except) > 0 {
