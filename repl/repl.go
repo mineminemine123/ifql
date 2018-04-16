@@ -194,7 +194,7 @@ func (r *REPL) doQuery(spec *query.Spec) error {
 	}
 	defer q.Done()
 
-	results, ok := <-q.Ready
+	results, ok := <-q.Ready()
 	if !ok {
 		err := q.Err()
 		return err
