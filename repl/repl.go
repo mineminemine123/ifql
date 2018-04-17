@@ -107,10 +107,20 @@ func (r *REPL) completer(d prompt.Document) []prompt.Suggest {
 			s = append(s, prompt.Suggest{Text: n})
 		}
 	}
-
-	ifqlFiles := getIfqlFiles("./")
-	for _, fName := range ifqlFiles {
-		s = append(s, prompt.Suggest{Text: "@" + fName})
+	if d.Text == "" || strings.HasPrefix(d.Text, "@") {
+		root := "./" + strings.TrimPrefix(d.Text, "@")
+		ifqlFiles, err := getIfqlFiles(root)
+		if err == nil {
+			for _, fName := range ifqlFiles {
+				s = append(s, prompt.Suggest{Text: "@" + fName})
+			}
+		}
+		dirs, err := getDirs(root)
+		if err == nil {
+			for _, fName := range dirs {
+				s = append(s, prompt.Suggest{Text: "@" + fName + string(os.PathSeparator)})
+			}
+		}
 	}
 
 	return prompt.FilterHasPrefix(s, d.GetWordBeforeCursor(), true)
@@ -221,25 +231,23 @@ func (r *REPL) doQuery(spec *query.Spec) error {
 	return nil
 }
 
-func getIfqlFiles(rootpath string) []string {
+func getIfqlFiles(path string) ([]string, error) {
+	return filepath.Glob(path + "*.ifql")
+}
 
-	list := make([]string, 0, 10)
-
-	err := filepath.Walk(rootpath, func(path string, info os.FileInfo, err error) error {
-		if info.IsDir() {
-			if path != rootpath {
-				list = append(list, path+string(os.PathSeparator))
-			}
-		}
-		if filepath.Ext(path) == ".ifql" {
-			list = append(list, path)
-		}
-		return nil
-	})
+func getDirs(path string) ([]string, error) {
+	dir := filepath.Dir(path)
+	files, err := ioutil.ReadDir(dir)
 	if err != nil {
-		fmt.Printf("walk error [%v]\n", err)
+		return nil, err
 	}
-	return list
+	dirs := make([]string, 0, len(files))
+	for _, f := range files {
+		if f.IsDir() {
+			dirs = append(dirs, filepath.Join(dir, f.Name()))
+		}
+	}
+	return dirs, nil
 }
 
 func LoadQuery(q string) (string, error) {
