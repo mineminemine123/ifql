@@ -52,7 +52,7 @@ func createWindowOpSpec(args query.Arguments, a *query.Administration) (query.Op
 		return nil, err
 	}
 	if periodSet {
-		spec.Every = period
+		spec.Period = period
 	}
 	if round, ok, err := args.GetDuration("round"); err != nil {
 		return nil, err
