@@ -87,9 +87,9 @@ func (e *executor) createExecutionState(ctx context.Context, p *plan.PlanSpec) (
 		if err != nil {
 			return nil, err
 		}
-		rs := newResultSink(yield)
-		ds.AddTransformation(rs)
-		es.results[name] = rs
+		r := newResult(yield)
+		ds.AddTransformation(r)
+		es.results[name] = r
 	}
 	return es, nil
 }
@@ -155,7 +155,7 @@ func (es *executionState) createNode(ctx context.Context, pr *plan.Procedure) (N
 
 func (es *executionState) abort(err error) {
 	for _, r := range es.results {
-		r.abort(err)
+		r.(*result).abort(err)
 	}
 }
 
