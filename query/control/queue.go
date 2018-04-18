@@ -8,7 +8,7 @@ type priorityQueue []*Query
 func (pq priorityQueue) Len() int { return len(pq) }
 
 func (pq priorityQueue) Less(i, j int) bool {
-	return pq[i].Spec.Resources.Priority < pq[j].Spec.Resources.Priority
+	return pq[i].spec.Resources.Priority < pq[j].spec.Resources.Priority
 }
 
 func (pq priorityQueue) Swap(i, j int) {

@@ -186,7 +186,7 @@ func HandleQuery(w http.ResponseWriter, req *http.Request) {
 	}
 	defer q.Done()
 
-	funcs, err := q.Spec.Functions()
+	funcs, err := q.Spec().Functions()
 	if err != nil {
 		w.WriteHeader(http.StatusInternalServerError)
 		w.Write([]byte(fmt.Sprintf("Error analyzing query %s", err.Error())))
