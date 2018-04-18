@@ -80,7 +80,7 @@ func (c *Controller) QueryWithCompile(ctx context.Context, queryStr string) (*Qu
 // Done must be called on any returned Query objects.
 func (c *Controller) Query(ctx context.Context, qSpec *query.Spec) (*Query, error) {
 	q := c.createQuery(ctx)
-	q.Spec = *qSpec
+	q.spec = *qSpec
 	err := c.enqueueQuery(q)
 	return q, err
 }
@@ -106,16 +106,16 @@ func (c *Controller) compileQuery(q *Query, queryStr string) error {
 	if err != nil {
 		return errors.Wrap(err, "failed to compile query")
 	}
-	q.Spec = *spec
+	q.spec = *spec
 	return nil
 }
 
 func (c *Controller) enqueueQuery(q *Query) error {
 	if c.verbose {
-		log.Println("query", query.Formatted(&q.Spec, query.FmtJSON))
+		log.Println("query", query.Formatted(&q.spec, query.FmtJSON))
 	}
 	q.queue()
-	if err := q.Spec.Validate(); err != nil {
+	if err := q.spec.Validate(); err != nil {
 		return errors.Wrap(err, "invalid query")
 	}
 	// Add query to the queue
@@ -183,7 +183,7 @@ func (c *Controller) run() {
 func (c *Controller) processQuery(pq *PriorityQueue, q *Query) error {
 	if q.tryPlan() {
 		// Plan query to determine needed resources
-		lp, err := c.lplanner.Plan(&q.Spec)
+		lp, err := c.lplanner.Plan(&q.spec)
 		if err != nil {
 			return errors.Wrap(err, "failed to create logical plan")
 		}
@@ -253,7 +253,7 @@ type Query struct {
 	id QueryID
 	c  *Controller
 
-	Spec query.Spec
+	spec query.Spec
 	now  time.Time
 
 	err error
@@ -286,6 +286,10 @@ type Query struct {
 // ID reports an ephemeral unique ID for the query.
 func (q *Query) ID() QueryID {
 	return q.id
+}
+
+func (q *Query) Spec() *query.Spec {
+	return &q.spec
 }
 
 // Cancel will stop the query execution.
