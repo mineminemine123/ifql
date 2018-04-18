@@ -3,6 +3,7 @@ package functions
 import (
 	"fmt"
 
+	"github.com/influxdata/ifql/functions/storage"
 	"github.com/influxdata/ifql/interpreter"
 	"github.com/influxdata/ifql/query"
 	"github.com/influxdata/ifql/query/execute"
@@ -143,7 +144,7 @@ func (s *FromProcedureSpec) Copy() plan.ProcedureSpec {
 	return ns
 }
 
-func createFromSource(prSpec plan.ProcedureSpec, id execute.DatasetID, sr execute.StorageReader, a execute.Administration) execute.Source {
+func createFromSource(prSpec plan.ProcedureSpec, id execute.DatasetID, a execute.Administration) (execute.Source, error) {
 	spec := prSpec.(*FromProcedureSpec)
 	var w execute.Window
 	if spec.WindowSet {
@@ -166,10 +167,14 @@ func createFromSource(prSpec plan.ProcedureSpec, id execute.DatasetID, sr execut
 		Start: a.ResolveTime(spec.Bounds.Start),
 		Stop:  a.ResolveTime(spec.Bounds.Stop),
 	}
-	return execute.NewStorageSource(
+	sr, err := storage.NewReader(a.Config()["storage"].(storage.Config))
+	if err != nil {
+		return nil, err
+	}
+	return storage.NewSource(
 		id,
 		sr,
-		execute.ReadSpec{
+		storage.ReadSpec{
 			Database:        spec.Database,
 			Hosts:           spec.Hosts,
 			Predicate:       spec.Filter,
@@ -187,5 +192,5 @@ func createFromSource(prSpec plan.ProcedureSpec, id execute.DatasetID, sr execut
 		bounds,
 		w,
 		currentTime,
-	)
+	), nil
 }

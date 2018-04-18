@@ -1,22 +1,138 @@
-package execute
+package storage
 
 import (
 	"bytes"
 	"context"
 	"fmt"
 	"io"
+	"log"
 	"strings"
 
-	"github.com/influxdata/ifql/ast"
-	"github.com/influxdata/ifql/query/execute/storage"
+	"github.com/influxdata/ifql/functions/storage/internal/pb"
+	"github.com/influxdata/ifql/query/execute"
 	"github.com/influxdata/ifql/semantic"
 	"github.com/influxdata/yarpc"
+	opentracing "github.com/opentracing/opentracing-go"
 	"github.com/pkg/errors"
 )
 
-type StorageReader interface {
-	Read(ctx context.Context, trace map[string]string, rs ReadSpec, start, stop Time) (BlockIterator, error)
-	Close()
+type HostLookup interface {
+	Hosts() []string
+	Watch() <-chan struct{}
+}
+
+type Config struct {
+	HostLookup HostLookup
+}
+
+type StaticLookup struct {
+	hosts []string
+}
+
+func NewStaticLookup(hosts []string) StaticLookup {
+	return StaticLookup{
+		hosts: hosts,
+	}
+}
+
+func (l StaticLookup) Hosts() []string {
+	return l.hosts
+}
+func (l StaticLookup) Watch() <-chan struct{} {
+	// A nil channel always blocks, since hosts never change this is appropriate.
+	return nil
+}
+
+// source performs storage reads
+type source struct {
+	id       execute.DatasetID
+	reader   Reader
+	readSpec ReadSpec
+	window   execute.Window
+	bounds   execute.Bounds
+
+	ts []execute.Transformation
+
+	currentTime execute.Time
+}
+
+func NewSource(id execute.DatasetID, r Reader, readSpec ReadSpec, bounds execute.Bounds, w execute.Window, currentTime execute.Time) execute.Source {
+	return &source{
+		id:          id,
+		reader:      r,
+		readSpec:    readSpec,
+		bounds:      bounds,
+		window:      w,
+		currentTime: currentTime,
+	}
+}
+
+func (s *source) AddTransformation(t execute.Transformation) {
+	s.ts = append(s.ts, t)
+}
+
+func (s *source) Run(ctx context.Context) {
+	err := s.run(ctx)
+	for _, t := range s.ts {
+		t.Finish(s.id, err)
+	}
+}
+func (s *source) run(ctx context.Context) error {
+
+	var trace map[string]string
+	if span := opentracing.SpanFromContext(ctx); span != nil {
+		trace = make(map[string]string)
+		span = opentracing.StartSpan("storage_source.run", opentracing.ChildOf(span.Context()))
+		_ = opentracing.GlobalTracer().Inject(span.Context(), opentracing.TextMap, opentracing.TextMapCarrier(trace))
+	}
+
+	//TODO(nathanielc): Pass through context to actual network I/O.
+	for blocks, mark, ok := s.next(ctx, trace); ok; blocks, mark, ok = s.next(ctx, trace) {
+		err := blocks.Do(func(b execute.Block) error {
+			for _, t := range s.ts {
+				if err := t.Process(s.id, b); err != nil {
+					return err
+				}
+				//TODO(nathanielc): Also add mechanism to send UpdateProcessingTime calls, when no data is arriving.
+				// This is probably not needed for this source, but other sources should do so.
+				if err := t.UpdateProcessingTime(s.id, execute.Now()); err != nil {
+					return err
+				}
+			}
+			return nil
+		})
+		if err != nil {
+			return err
+		}
+		for _, t := range s.ts {
+			if err := t.UpdateWatermark(s.id, mark); err != nil {
+				return err
+			}
+		}
+	}
+	return nil
+}
+
+func (s *source) next(ctx context.Context, trace map[string]string) (execute.BlockIterator, execute.Time, bool) {
+	start := s.currentTime - execute.Time(s.window.Period)
+	stop := s.currentTime
+
+	s.currentTime = s.currentTime + execute.Time(s.window.Every)
+	if stop > s.bounds.Stop {
+		return nil, 0, false
+	}
+	bi, err := s.reader.Read(
+		ctx,
+		trace,
+		s.readSpec,
+		start,
+		stop,
+	)
+	if err != nil {
+		log.Println("E!", err)
+		return nil, 0, false
+	}
+	return bi, stop, true
 }
 
 type ReadSpec struct {
@@ -46,10 +162,14 @@ type ReadSpec struct {
 	GroupKeep []string
 }
 
-func NewStorageReader(hosts []string) (StorageReader, error) {
-	if len(hosts) == 0 {
-		return nil, errors.New("must provide at least one storage host")
-	}
+type Reader interface {
+	Read(ctx context.Context, trace map[string]string, rs ReadSpec, start, stop execute.Time) (execute.BlockIterator, error)
+	Close()
+}
+
+func NewReader(c Config) (Reader, error) {
+	// TODO(nathanielc): Watch for host changes
+	hosts := c.HostLookup.Hosts()
 	conns := make([]connection, len(hosts))
 	for i, h := range hosts {
 		conn, err := yarpc.Dial(h)
@@ -59,26 +179,26 @@ func NewStorageReader(hosts []string) (StorageReader, error) {
 		conns[i] = connection{
 			host:   h,
 			conn:   conn,
-			client: storage.NewStorageClient(conn),
+			client: pb.NewStorageClient(conn),
 		}
 	}
-	return &storageReader{
+	return &reader{
 		conns: conns,
 	}, nil
 }
 
-type storageReader struct {
+type reader struct {
 	conns []connection
 }
 
 type connection struct {
 	host   string
 	conn   *yarpc.ClientConn
-	client storage.StorageClient
+	client pb.StorageClient
 }
 
-func (sr *storageReader) Read(ctx context.Context, trace map[string]string, readSpec ReadSpec, start, stop Time) (BlockIterator, error) {
-	var predicate *storage.Predicate
+func (sr *reader) Read(ctx context.Context, trace map[string]string, readSpec ReadSpec, start, stop execute.Time) (execute.BlockIterator, error) {
+	var predicate *pb.Predicate
 	if readSpec.Predicate != nil {
 		p, err := ToStoragePredicate(readSpec.Predicate)
 		if err != nil {
@@ -87,10 +207,10 @@ func (sr *storageReader) Read(ctx context.Context, trace map[string]string, read
 		predicate = p
 	}
 
-	bi := &storageBlockIterator{
+	bi := &bockIterator{
 		ctx:   ctx,
 		trace: trace,
-		bounds: Bounds{
+		bounds: execute.Bounds{
 			Start: start,
 			Stop:  stop,
 		},
@@ -101,24 +221,24 @@ func (sr *storageReader) Read(ctx context.Context, trace map[string]string, read
 	return bi, nil
 }
 
-func (sr *storageReader) Close() {
+func (sr *reader) Close() {
 	for _, conn := range sr.conns {
 		_ = conn.conn.Close()
 	}
 }
 
-type storageBlockIterator struct {
+type bockIterator struct {
 	ctx       context.Context
 	trace     map[string]string
-	bounds    Bounds
+	bounds    execute.Bounds
 	conns     []connection
 	readSpec  ReadSpec
-	predicate *storage.Predicate
+	predicate *pb.Predicate
 }
 
-func (bi *storageBlockIterator) Do(f func(Block) error) error {
+func (bi *bockIterator) Do(f func(execute.Block) error) error {
 	// Setup read request
-	var req storage.ReadRequest
+	var req pb.ReadRequest
 	req.Database = bi.readSpec.Database
 	req.Predicate = bi.predicate
 	req.Descending = bi.readSpec.Descending
@@ -133,8 +253,8 @@ func (bi *storageBlockIterator) Do(f func(Block) error) error {
 
 	if agg, err := determineAggregateMethod(bi.readSpec.AggregateMethod); err != nil {
 		return err
-	} else if agg != storage.AggregateTypeNone {
-		req.Aggregate = &storage.Aggregate{Type: agg}
+	} else if agg != pb.AggregateTypeNone {
+		req.Aggregate = &pb.Aggregate{Type: agg}
 	}
 
 	streams := make([]*streamState, 0, len(bi.conns))
@@ -175,7 +295,7 @@ func (bi *storageBlockIterator) Do(f func(Block) error) error {
 		typ := convertDataType(s.DataType)
 		tags, keptTags := bi.determineBlockTags(s)
 		k := appendSeriesKey(nil, s, &bi.readSpec)
-		block := newStorageBlock(bi.bounds, tags, keptTags, k, ms, &bi.readSpec, typ)
+		block := newBlock(bi.bounds, tags, keptTags, k, ms, &bi.readSpec, typ)
 
 		if err := f(block); err != nil {
 			// TODO(nathanielc): Close streams since we have abandoned the request
@@ -187,36 +307,37 @@ func (bi *storageBlockIterator) Do(f func(Block) error) error {
 	return nil
 }
 
-func determineAggregateMethod(agg string) (storage.Aggregate_AggregateType, error) {
+func determineAggregateMethod(agg string) (pb.Aggregate_AggregateType, error) {
 	if agg == "" {
-		return storage.AggregateTypeNone, nil
+		return pb.AggregateTypeNone, nil
 	}
 
-	if t, ok := storage.Aggregate_AggregateType_value[strings.ToUpper(agg)]; ok {
-		return storage.Aggregate_AggregateType(t), nil
+	if t, ok := pb.Aggregate_AggregateType_value[strings.ToUpper(agg)]; ok {
+		return pb.Aggregate_AggregateType(t), nil
 	}
 	return 0, fmt.Errorf("unknown aggregate type %q", agg)
 }
-func convertDataType(t storage.ReadResponse_DataType) DataType {
+
+func convertDataType(t pb.ReadResponse_DataType) execute.DataType {
 	switch t {
-	case storage.DataTypeFloat:
-		return TFloat
-	case storage.DataTypeInteger:
-		return TInt
-	case storage.DataTypeUnsigned:
-		return TUInt
-	case storage.DataTypeBoolean:
-		return TBool
-	case storage.DataTypeString:
-		return TString
+	case pb.DataTypeFloat:
+		return execute.TFloat
+	case pb.DataTypeInteger:
+		return execute.TInt
+	case pb.DataTypeUnsigned:
+		return execute.TUInt
+	case pb.DataTypeBoolean:
+		return execute.TBool
+	case pb.DataTypeString:
+		return execute.TString
 	default:
-		return TInvalid
+		return execute.TInvalid
 	}
 }
 
-func (bi *storageBlockIterator) determineBlockTags(s *storage.ReadResponse_SeriesFrame) (tags, keptTags Tags) {
+func (bi *bockIterator) determineBlockTags(s *pb.ReadResponse_SeriesFrame) (tags, keptTags execute.Tags) {
 	if len(bi.readSpec.GroupKeys) > 0 {
-		tags = make(Tags, len(bi.readSpec.GroupKeys))
+		tags = make(execute.Tags, len(bi.readSpec.GroupKeys))
 		for _, key := range bi.readSpec.GroupKeys {
 			for _, tag := range s.Tags {
 				if string(tag.Key) == key {
@@ -226,7 +347,7 @@ func (bi *storageBlockIterator) determineBlockTags(s *storage.ReadResponse_Serie
 			}
 		}
 		if len(bi.readSpec.GroupKeep) > 0 {
-			keptTags = make(Tags, len(bi.readSpec.GroupKeep))
+			keptTags = make(execute.Tags, len(bi.readSpec.GroupKeep))
 			for _, key := range bi.readSpec.GroupKeep {
 				for _, tag := range s.Tags {
 					if string(tag.Key) == key {
@@ -237,8 +358,8 @@ func (bi *storageBlockIterator) determineBlockTags(s *storage.ReadResponse_Serie
 			}
 		}
 	} else if len(bi.readSpec.GroupExcept) > 0 {
-		tags = make(Tags, len(s.Tags)-len(bi.readSpec.GroupExcept))
-		keptTags = make(Tags, len(bi.readSpec.GroupKeep))
+		tags = make(execute.Tags, len(s.Tags)-len(bi.readSpec.GroupExcept))
+		keptTags = make(execute.Tags, len(bi.readSpec.GroupKeep))
 	TAGS:
 		for _, t := range s.Tags {
 			k := string(t.Key)
@@ -256,12 +377,12 @@ func (bi *storageBlockIterator) determineBlockTags(s *storage.ReadResponse_Serie
 			tags[k] = string(t.Value)
 		}
 	} else if !bi.readSpec.MergeAll {
-		tags = make(Tags, len(s.Tags))
+		tags = make(execute.Tags, len(s.Tags))
 		for _, t := range s.Tags {
 			tags[string(t.Key)] = string(t.Value)
 		}
 	} else {
-		keptTags = make(Tags, len(bi.readSpec.GroupKeep))
+		keptTags = make(execute.Tags, len(bi.readSpec.GroupKeep))
 		for _, t := range s.Tags {
 			k := string(t.Key)
 			for _, key := range bi.readSpec.GroupKeep {
@@ -274,8 +395,8 @@ func (bi *storageBlockIterator) determineBlockTags(s *storage.ReadResponse_Serie
 	return
 }
 
-func appendSeriesKey(b key, s *storage.ReadResponse_SeriesFrame, readSpec *ReadSpec) key {
-	appendTag := func(t storage.Tag) {
+func appendSeriesKey(b key, s *pb.ReadResponse_SeriesFrame, readSpec *ReadSpec) key {
+	appendTag := func(t pb.Tag) {
 		b = append(b, t.Key...)
 		b = append(b, '=')
 		b = append(b, t.Value...)
@@ -324,17 +445,17 @@ func appendSeriesKey(b key, s *storage.ReadResponse_SeriesFrame, readSpec *ReadS
 	return b
 }
 
-// storageBlock implement OneTimeBlock as it can only be read once.
+// block implement OneTimeBlock as it can only be read once.
 // Since it can only be read once it is also a ValueIterator for itself.
-type storageBlock struct {
-	bounds Bounds
-	tags   Tags
+type block struct {
+	bounds execute.Bounds
+	tags   execute.Tags
 	tagKey key
 	// keptTags is a set of non common tags.
-	keptTags Tags
+	keptTags execute.Tags
 	// colMeta always has at least two columns, where the first is a TimeCol
 	// and the second is any Value column.
-	colMeta []ColMeta
+	colMeta []execute.ColMeta
 
 	readSpec *ReadSpec
 
@@ -348,7 +469,7 @@ type storageBlock struct {
 	colBufs [2]interface{}
 
 	// resuable buffer for the time column
-	timeBuf []Time
+	timeBuf []execute.Time
 
 	// resuable buffers for the different types of values
 	boolBuf   []bool
@@ -358,32 +479,32 @@ type storageBlock struct {
 	stringBuf []string
 }
 
-func newStorageBlock(bounds Bounds, tags, keptTags Tags, tagKey key, ms *mergedStreams, readSpec *ReadSpec, typ DataType) *storageBlock {
-	colMeta := make([]ColMeta, 2, 2+len(tags)+len(keptTags))
-	colMeta[0] = TimeCol
-	colMeta[1] = ColMeta{
-		Label: DefaultValueColLabel,
+func newBlock(bounds execute.Bounds, tags, keptTags execute.Tags, tagKey key, ms *mergedStreams, readSpec *ReadSpec, typ execute.DataType) *block {
+	colMeta := make([]execute.ColMeta, 2, 2+len(tags)+len(keptTags))
+	colMeta[0] = execute.TimeCol
+	colMeta[1] = execute.ColMeta{
+		Label: execute.DefaultValueColLabel,
 		Type:  typ,
-		Kind:  ValueColKind,
+		Kind:  execute.ValueColKind,
 	}
 
 	for _, k := range tags.Keys() {
-		colMeta = append(colMeta, ColMeta{
+		colMeta = append(colMeta, execute.ColMeta{
 			Label:  k,
-			Type:   TString,
-			Kind:   TagColKind,
+			Type:   execute.TString,
+			Kind:   execute.TagColKind,
 			Common: true,
 		})
 	}
 	for _, k := range keptTags.Keys() {
-		colMeta = append(colMeta, ColMeta{
+		colMeta = append(colMeta, execute.ColMeta{
 			Label:  k,
-			Type:   TString,
-			Kind:   TagColKind,
+			Type:   execute.TString,
+			Kind:   execute.TagColKind,
 			Common: false,
 		})
 	}
-	return &storageBlock{
+	return &block{
 		bounds:   bounds,
 		tagKey:   tagKey,
 		tags:     tags,
@@ -395,73 +516,73 @@ func newStorageBlock(bounds Bounds, tags, keptTags Tags, tagKey key, ms *mergedS
 	}
 }
 
-func (b *storageBlock) RefCount(n int) {
+func (b *block) RefCount(n int) {
 	//TODO(nathanielc): Have the storageBlock consume the Allocator,
 	// once we have zero-copy serialization over the network
 }
 
-func (b *storageBlock) wait() {
+func (b *block) wait() {
 	<-b.done
 }
 
 // onetime satisfies the OneTimeBlock interface since this block may only be read once.
-func (b *storageBlock) onetime() {}
+func (b *block) onetime() {}
 
-func (b *storageBlock) Bounds() Bounds {
+func (b *block) Bounds() execute.Bounds {
 	return b.bounds
 }
-func (b *storageBlock) Tags() Tags {
+func (b *block) Tags() execute.Tags {
 	return b.tags
 }
-func (b *storageBlock) Cols() []ColMeta {
+func (b *block) Cols() []execute.ColMeta {
 	return b.colMeta
 }
 
-func (b *storageBlock) Col(c int) ValueIterator {
+func (b *block) Col(c int) execute.ValueIterator {
 	b.col = c
 	return b
 }
 
-func (b *storageBlock) Times() ValueIterator {
+func (b *block) Times() execute.ValueIterator {
 	return b.Col(0)
 }
-func (b *storageBlock) Values() (ValueIterator, error) {
+func (b *block) Values() (execute.ValueIterator, error) {
 	return b.Col(1), nil
 }
 
-func (b *storageBlock) DoBool(f func([]bool, RowReader)) {
-	checkColType(b.colMeta[b.col], TBool)
+func (b *block) DoBool(f func([]bool, execute.RowReader)) {
+	execute.CheckColType(b.colMeta[b.col], execute.TBool)
 	for b.advance() {
 		f(b.colBufs[b.col].([]bool), b)
 	}
 	close(b.done)
 }
-func (b *storageBlock) DoInt(f func([]int64, RowReader)) {
-	checkColType(b.colMeta[b.col], TInt)
+func (b *block) DoInt(f func([]int64, execute.RowReader)) {
+	execute.CheckColType(b.colMeta[b.col], execute.TInt)
 	for b.advance() {
 		f(b.colBufs[b.col].([]int64), b)
 	}
 	close(b.done)
 }
-func (b *storageBlock) DoUInt(f func([]uint64, RowReader)) {
-	checkColType(b.colMeta[b.col], TUInt)
+func (b *block) DoUInt(f func([]uint64, execute.RowReader)) {
+	execute.CheckColType(b.colMeta[b.col], execute.TUInt)
 	for b.advance() {
 		f(b.colBufs[b.col].([]uint64), b)
 	}
 	close(b.done)
 }
-func (b *storageBlock) DoFloat(f func([]float64, RowReader)) {
-	checkColType(b.colMeta[b.col], TFloat)
+func (b *block) DoFloat(f func([]float64, execute.RowReader)) {
+	execute.CheckColType(b.colMeta[b.col], execute.TFloat)
 	for b.advance() {
 		f(b.colBufs[b.col].([]float64), b)
 	}
 	close(b.done)
 }
-func (b *storageBlock) DoString(f func([]string, RowReader)) {
+func (b *block) DoString(f func([]string, execute.RowReader)) {
 	defer close(b.done)
 
 	meta := b.colMeta[b.col]
-	checkColType(meta, TString)
+	execute.CheckColType(meta, execute.TString)
 	if meta.IsTag() {
 		// Handle creating a strs slice that can be ranged according to actual data received.
 		var strs []string
@@ -496,33 +617,33 @@ func (b *storageBlock) DoString(f func([]string, RowReader)) {
 		f(b.colBufs[b.col].([]string), b)
 	}
 }
-func (b *storageBlock) DoTime(f func([]Time, RowReader)) {
-	checkColType(b.colMeta[b.col], TTime)
+func (b *block) DoTime(f func([]execute.Time, execute.RowReader)) {
+	execute.CheckColType(b.colMeta[b.col], execute.TTime)
 	for b.advance() {
-		f(b.colBufs[b.col].([]Time), b)
+		f(b.colBufs[b.col].([]execute.Time), b)
 	}
 	close(b.done)
 }
 
-func (b *storageBlock) AtBool(i, j int) bool {
-	checkColType(b.colMeta[j], TBool)
+func (b *block) AtBool(i, j int) bool {
+	execute.CheckColType(b.colMeta[j], execute.TBool)
 	return b.colBufs[j].([]bool)[i]
 }
-func (b *storageBlock) AtInt(i, j int) int64 {
-	checkColType(b.colMeta[j], TInt)
+func (b *block) AtInt(i, j int) int64 {
+	execute.CheckColType(b.colMeta[j], execute.TInt)
 	return b.colBufs[j].([]int64)[i]
 }
-func (b *storageBlock) AtUInt(i, j int) uint64 {
-	checkColType(b.colMeta[j], TUInt)
+func (b *block) AtUInt(i, j int) uint64 {
+	execute.CheckColType(b.colMeta[j], execute.TUInt)
 	return b.colBufs[j].([]uint64)[i]
 }
-func (b *storageBlock) AtFloat(i, j int) float64 {
-	checkColType(b.colMeta[j], TFloat)
+func (b *block) AtFloat(i, j int) float64 {
+	execute.CheckColType(b.colMeta[j], execute.TFloat)
 	return b.colBufs[j].([]float64)[i]
 }
-func (b *storageBlock) AtString(i, j int) string {
+func (b *block) AtString(i, j int) string {
 	meta := b.colMeta[j]
-	checkColType(meta, TString)
+	execute.CheckColType(meta, execute.TString)
 	if meta.IsTag() {
 		if meta.Common {
 			return b.tags[meta.Label]
@@ -531,12 +652,12 @@ func (b *storageBlock) AtString(i, j int) string {
 	}
 	return b.colBufs[j].([]string)[i]
 }
-func (b *storageBlock) AtTime(i, j int) Time {
-	checkColType(b.colMeta[j], TTime)
-	return b.colBufs[j].([]Time)[i]
+func (b *block) AtTime(i, j int) execute.Time {
+	execute.CheckColType(b.colMeta[j], execute.TTime)
+	return b.colBufs[j].([]execute.Time)[i]
 }
 
-func (b *storageBlock) advance() bool {
+func (b *block) advance() bool {
 	for b.ms.more() {
 		//reset buffers
 		b.timeBuf = b.timeBuf[0:0]
@@ -554,7 +675,7 @@ func (b *storageBlock) advance() bool {
 			}
 			s := p.GetSeries()
 			// Populate keptTags with new series values
-			b.keptTags = make(Tags, len(b.readSpec.GroupKeep))
+			b.keptTags = make(execute.Tags, len(b.readSpec.GroupKeep))
 			for _, t := range s.Tags {
 				k := string(t.Key)
 				for _, key := range b.readSpec.GroupKeep {
@@ -566,7 +687,7 @@ func (b *storageBlock) advance() bool {
 			// Advance to next frame
 			b.ms.next()
 		case boolPointsType:
-			if b.colMeta[1].Type != TBool {
+			if b.colMeta[1].Type != execute.TBool {
 				// TODO: Add error handling
 				// Type changed,
 				return false
@@ -576,7 +697,7 @@ func (b *storageBlock) advance() bool {
 			p := frame.GetBooleanPoints()
 			l := len(p.Timestamps)
 			if l > cap(b.timeBuf) {
-				b.timeBuf = make([]Time, l)
+				b.timeBuf = make([]execute.Time, l)
 			} else {
 				b.timeBuf = b.timeBuf[:l]
 			}
@@ -587,14 +708,14 @@ func (b *storageBlock) advance() bool {
 			}
 
 			for i, c := range p.Timestamps {
-				b.timeBuf[i] = Time(c)
+				b.timeBuf[i] = execute.Time(c)
 				b.boolBuf[i] = p.Values[i]
 			}
 			b.colBufs[0] = b.timeBuf
 			b.colBufs[1] = b.boolBuf
 			return true
 		case intPointsType:
-			if b.colMeta[1].Type != TInt {
+			if b.colMeta[1].Type != execute.TInt {
 				// TODO: Add error handling
 				// Type changed,
 				return false
@@ -604,7 +725,7 @@ func (b *storageBlock) advance() bool {
 			p := frame.GetIntegerPoints()
 			l := len(p.Timestamps)
 			if l > cap(b.timeBuf) {
-				b.timeBuf = make([]Time, l)
+				b.timeBuf = make([]execute.Time, l)
 			} else {
 				b.timeBuf = b.timeBuf[:l]
 			}
@@ -615,14 +736,14 @@ func (b *storageBlock) advance() bool {
 			}
 
 			for i, c := range p.Timestamps {
-				b.timeBuf[i] = Time(c)
+				b.timeBuf[i] = execute.Time(c)
 				b.intBuf[i] = p.Values[i]
 			}
 			b.colBufs[0] = b.timeBuf
 			b.colBufs[1] = b.intBuf
 			return true
 		case uintPointsType:
-			if b.colMeta[1].Type != TUInt {
+			if b.colMeta[1].Type != execute.TUInt {
 				// TODO: Add error handling
 				// Type changed,
 				return false
@@ -632,7 +753,7 @@ func (b *storageBlock) advance() bool {
 			p := frame.GetUnsignedPoints()
 			l := len(p.Timestamps)
 			if l > cap(b.timeBuf) {
-				b.timeBuf = make([]Time, l)
+				b.timeBuf = make([]execute.Time, l)
 			} else {
 				b.timeBuf = b.timeBuf[:l]
 			}
@@ -643,14 +764,14 @@ func (b *storageBlock) advance() bool {
 			}
 
 			for i, c := range p.Timestamps {
-				b.timeBuf[i] = Time(c)
+				b.timeBuf[i] = execute.Time(c)
 				b.uintBuf[i] = p.Values[i]
 			}
 			b.colBufs[0] = b.timeBuf
 			b.colBufs[1] = b.uintBuf
 			return true
 		case floatPointsType:
-			if b.colMeta[1].Type != TFloat {
+			if b.colMeta[1].Type != execute.TFloat {
 				// TODO: Add error handling
 				// Type changed,
 				return false
@@ -661,7 +782,7 @@ func (b *storageBlock) advance() bool {
 
 			l := len(p.Timestamps)
 			if l > cap(b.timeBuf) {
-				b.timeBuf = make([]Time, l)
+				b.timeBuf = make([]execute.Time, l)
 			} else {
 				b.timeBuf = b.timeBuf[:l]
 			}
@@ -672,14 +793,14 @@ func (b *storageBlock) advance() bool {
 			}
 
 			for i, c := range p.Timestamps {
-				b.timeBuf[i] = Time(c)
+				b.timeBuf[i] = execute.Time(c)
 				b.floatBuf[i] = p.Values[i]
 			}
 			b.colBufs[0] = b.timeBuf
 			b.colBufs[1] = b.floatBuf
 			return true
 		case stringPointsType:
-			if b.colMeta[1].Type != TString {
+			if b.colMeta[1].Type != execute.TString {
 				// TODO: Add error handling
 				// Type changed,
 				return false
@@ -690,7 +811,7 @@ func (b *storageBlock) advance() bool {
 
 			l := len(p.Timestamps)
 			if l > cap(b.timeBuf) {
-				b.timeBuf = make([]Time, l)
+				b.timeBuf = make([]execute.Time, l)
 			} else {
 				b.timeBuf = b.timeBuf[:l]
 			}
@@ -701,7 +822,7 @@ func (b *storageBlock) advance() bool {
 			}
 
 			for i, c := range p.Timestamps {
-				b.timeBuf[i] = Time(c)
+				b.timeBuf[i] = execute.Time(c)
 				b.stringBuf[i] = p.Values[i]
 			}
 			b.colBufs[0] = b.timeBuf
@@ -713,14 +834,14 @@ func (b *storageBlock) advance() bool {
 }
 
 type streamState struct {
-	stream     storage.Storage_ReadClient
-	rep        storage.ReadResponse
+	stream     pb.Storage_ReadClient
+	rep        pb.ReadResponse
 	currentKey key
 	readSpec   *ReadSpec
 	finished   bool
 }
 
-func (s *streamState) peek() storage.ReadResponse_Frame {
+func (s *streamState) peek() pb.ReadResponse_Frame {
 	return s.rep.Frames[0]
 }
 
@@ -758,7 +879,7 @@ func (s *streamState) computeKey() {
 		s.currentKey = appendSeriesKey(s.currentKey[0:0], series, s.readSpec)
 	}
 }
-func (s *streamState) next() storage.ReadResponse_Frame {
+func (s *streamState) next() pb.ReadResponse_Frame {
 	frame := s.rep.Frames[0]
 	s.rep.Frames = s.rep.Frames[1:]
 	if len(s.rep.Frames) > 0 {
@@ -795,11 +916,11 @@ func (s *mergedStreams) key() key {
 	}
 	return s.currentKey
 }
-func (s *mergedStreams) peek() storage.ReadResponse_Frame {
+func (s *mergedStreams) peek() pb.ReadResponse_Frame {
 	return s.streams[s.i].peek()
 }
 
-func (s *mergedStreams) next() storage.ReadResponse_Frame {
+func (s *mergedStreams) next() pb.ReadResponse_Frame {
 	return s.streams[s.i].next()
 }
 
@@ -874,171 +995,21 @@ const (
 	stringPointsType
 )
 
-func readFrameType(frame storage.ReadResponse_Frame) frameType {
+func readFrameType(frame pb.ReadResponse_Frame) frameType {
 	switch frame.Data.(type) {
-	case *storage.ReadResponse_Frame_Series:
+	case *pb.ReadResponse_Frame_Series:
 		return seriesType
-	case *storage.ReadResponse_Frame_BooleanPoints:
+	case *pb.ReadResponse_Frame_BooleanPoints:
 		return boolPointsType
-	case *storage.ReadResponse_Frame_IntegerPoints:
+	case *pb.ReadResponse_Frame_IntegerPoints:
 		return intPointsType
-	case *storage.ReadResponse_Frame_UnsignedPoints:
+	case *pb.ReadResponse_Frame_UnsignedPoints:
 		return uintPointsType
-	case *storage.ReadResponse_Frame_FloatPoints:
+	case *pb.ReadResponse_Frame_FloatPoints:
 		return floatPointsType
-	case *storage.ReadResponse_Frame_StringPoints:
+	case *pb.ReadResponse_Frame_StringPoints:
 		return stringPointsType
 	default:
 		panic(fmt.Errorf("unknown read response frame type: %T", frame.Data))
-	}
-}
-
-func ToStoragePredicate(f *semantic.FunctionExpression) (*storage.Predicate, error) {
-	if len(f.Params) != 1 {
-		return nil, errors.New("storage predicate functions must have exactly one parameter")
-	}
-
-	root, err := toStoragePredicate(f.Body.(semantic.Expression), f.Params[0].Key.Name)
-	if err != nil {
-		return nil, err
-	}
-
-	return &storage.Predicate{
-		Root: root,
-	}, nil
-}
-
-func toStoragePredicate(n semantic.Expression, objectName string) (*storage.Node, error) {
-	switch n := n.(type) {
-	case *semantic.LogicalExpression:
-		left, err := toStoragePredicate(n.Left, objectName)
-		if err != nil {
-			return nil, errors.Wrap(err, "left hand side")
-		}
-		right, err := toStoragePredicate(n.Right, objectName)
-		if err != nil {
-			return nil, errors.Wrap(err, "right hand side")
-		}
-		children := []*storage.Node{left, right}
-		switch n.Operator {
-		case ast.AndOperator:
-			return &storage.Node{
-				NodeType: storage.NodeTypeLogicalExpression,
-				Value:    &storage.Node_Logical_{Logical: storage.LogicalAnd},
-				Children: children,
-			}, nil
-		case ast.OrOperator:
-			return &storage.Node{
-				NodeType: storage.NodeTypeLogicalExpression,
-				Value:    &storage.Node_Logical_{Logical: storage.LogicalOr},
-				Children: children,
-			}, nil
-		default:
-			return nil, fmt.Errorf("unknown logical operator %v", n.Operator)
-		}
-	case *semantic.BinaryExpression:
-		left, err := toStoragePredicate(n.Left, objectName)
-		if err != nil {
-			return nil, errors.Wrap(err, "left hand side")
-		}
-		right, err := toStoragePredicate(n.Right, objectName)
-		if err != nil {
-			return nil, errors.Wrap(err, "right hand side")
-		}
-		children := []*storage.Node{left, right}
-		op, err := toComparisonOperator(n.Operator)
-		if err != nil {
-			return nil, err
-		}
-		return &storage.Node{
-			NodeType: storage.NodeTypeComparisonExpression,
-			Value:    &storage.Node_Comparison_{Comparison: op},
-			Children: children,
-		}, nil
-	case *semantic.StringLiteral:
-		return &storage.Node{
-			NodeType: storage.NodeTypeLiteral,
-			Value: &storage.Node_StringValue{
-				StringValue: n.Value,
-			},
-		}, nil
-	case *semantic.IntegerLiteral:
-		return &storage.Node{
-			NodeType: storage.NodeTypeLiteral,
-			Value: &storage.Node_IntegerValue{
-				IntegerValue: n.Value,
-			},
-		}, nil
-	case *semantic.BooleanLiteral:
-		return &storage.Node{
-			NodeType: storage.NodeTypeLiteral,
-			Value: &storage.Node_BooleanValue{
-				BooleanValue: n.Value,
-			},
-		}, nil
-	case *semantic.FloatLiteral:
-		return &storage.Node{
-			NodeType: storage.NodeTypeLiteral,
-			Value: &storage.Node_FloatValue{
-				FloatValue: n.Value,
-			},
-		}, nil
-	case *semantic.RegexpLiteral:
-		return &storage.Node{
-			NodeType: storage.NodeTypeLiteral,
-			Value: &storage.Node_RegexValue{
-				RegexValue: n.Value.String(),
-			},
-		}, nil
-	case *semantic.MemberExpression:
-		// Sanity check that the object is the objectName identifier
-		if ident, ok := n.Object.(*semantic.IdentifierExpression); !ok || ident.Name != objectName {
-			return nil, fmt.Errorf("unknown object %q", n.Object)
-		}
-		if n.Property == "_value" {
-			return &storage.Node{
-				NodeType: storage.NodeTypeFieldRef,
-				Value: &storage.Node_FieldRefValue{
-					FieldRefValue: "_value",
-				},
-			}, nil
-		}
-		return &storage.Node{
-			NodeType: storage.NodeTypeTagRef,
-			Value: &storage.Node_TagRefValue{
-				TagRefValue: n.Property,
-			},
-		}, nil
-	case *semantic.DurationLiteral:
-		return nil, errors.New("duration literals not supported in storage predicates")
-	case *semantic.DateTimeLiteral:
-		return nil, errors.New("time literals not supported in storage predicates")
-	default:
-		return nil, fmt.Errorf("unsupported semantic expression type %T", n)
-	}
-}
-
-func toComparisonOperator(o ast.OperatorKind) (storage.Node_Comparison, error) {
-	switch o {
-	case ast.EqualOperator:
-		return storage.ComparisonEqual, nil
-	case ast.NotEqualOperator:
-		return storage.ComparisonNotEqual, nil
-	case ast.RegexpMatchOperator:
-		return storage.ComparisonRegex, nil
-	case ast.NotRegexpMatchOperator:
-		return storage.ComparisonNotRegex, nil
-	case ast.StartsWithOperator:
-		return storage.ComparisonStartsWith, nil
-	case ast.LessThanOperator:
-		return storage.ComparisonLess, nil
-	case ast.LessThanEqualOperator:
-		return storage.ComparisonLessEqual, nil
-	case ast.GreaterThanOperator:
-		return storage.ComparisonGreater, nil
-	case ast.GreaterThanEqualOperator:
-		return storage.ComparisonGreaterEqual, nil
-	default:
-		return 0, fmt.Errorf("unknown operator %v", o)
 	}
 }

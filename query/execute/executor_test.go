@@ -14,6 +14,7 @@ import (
 	"github.com/influxdata/ifql/query/execute/executetest"
 	"github.com/influxdata/ifql/query/plan"
 	"github.com/influxdata/ifql/semantic"
+	uuid "github.com/satori/go.uuid"
 )
 
 var epoch = time.Unix(0, 0)
@@ -21,33 +22,11 @@ var epoch = time.Unix(0, 0)
 func TestExecutor_Execute(t *testing.T) {
 	testCases := []struct {
 		name string
-		src  []execute.Block
 		plan *plan.PlanSpec
 		exp  map[string][]*executetest.Block
 	}{
 		{
 			name: "simple aggregate",
-			src: []execute.Block{&executetest.Block{
-				Bnds: execute.Bounds{
-					Start: 1,
-					Stop:  5,
-				},
-				ColMeta: []execute.ColMeta{
-					execute.TimeCol,
-					execute.ColMeta{
-						Label: execute.DefaultValueColLabel,
-						Type:  execute.TFloat,
-						Kind:  execute.ValueColKind,
-					},
-				},
-				Data: [][]interface{}{
-					{execute.Time(0), 1.0},
-					{execute.Time(1), 2.0},
-					{execute.Time(2), 3.0},
-					{execute.Time(3), 4.0},
-					{execute.Time(4), 5.0},
-				},
-			}},
 			plan: &plan.PlanSpec{
 				Now: epoch.Add(5),
 				Resources: query.ResourceManagement{
@@ -61,15 +40,28 @@ func TestExecutor_Execute(t *testing.T) {
 				Procedures: map[plan.ProcedureID]*plan.Procedure{
 					plan.ProcedureIDFromOperationID("from"): {
 						ID: plan.ProcedureIDFromOperationID("from"),
-						Spec: &functions.FromProcedureSpec{
-							Database:  "mydb",
-							BoundsSet: true,
-							Bounds: plan.BoundsSpec{
-								Start: query.Time{
-									Relative:   -5,
-									IsRelative: true,
+						Spec: &testFromProcedureSource{
+							data: []execute.Block{&executetest.Block{
+								Bnds: execute.Bounds{
+									Start: 1,
+									Stop:  5,
 								},
-							},
+								ColMeta: []execute.ColMeta{
+									execute.TimeCol,
+									execute.ColMeta{
+										Label: execute.DefaultValueColLabel,
+										Type:  execute.TFloat,
+										Kind:  execute.ValueColKind,
+									},
+								},
+								Data: [][]interface{}{
+									{execute.Time(0), 1.0},
+									{execute.Time(1), 2.0},
+									{execute.Time(2), 3.0},
+									{execute.Time(3), 4.0},
+									{execute.Time(4), 5.0},
+								},
+							}},
 						},
 						Parents:  nil,
 						Children: []plan.ProcedureID{plan.ProcedureIDFromOperationID("sum")},
@@ -109,27 +101,6 @@ func TestExecutor_Execute(t *testing.T) {
 		},
 		{
 			name: "simple join",
-			src: []execute.Block{&executetest.Block{
-				Bnds: execute.Bounds{
-					Start: 1,
-					Stop:  5,
-				},
-				ColMeta: []execute.ColMeta{
-					execute.TimeCol,
-					execute.ColMeta{
-						Label: execute.DefaultValueColLabel,
-						Type:  execute.TInt,
-						Kind:  execute.ValueColKind,
-					},
-				},
-				Data: [][]interface{}{
-					{execute.Time(0), int64(1)},
-					{execute.Time(1), int64(2)},
-					{execute.Time(2), int64(3)},
-					{execute.Time(3), int64(4)},
-					{execute.Time(4), int64(5)},
-				},
-			}},
 			plan: &plan.PlanSpec{
 				Now: epoch.Add(5),
 				Resources: query.ResourceManagement{
@@ -143,15 +114,28 @@ func TestExecutor_Execute(t *testing.T) {
 				Procedures: map[plan.ProcedureID]*plan.Procedure{
 					plan.ProcedureIDFromOperationID("from"): {
 						ID: plan.ProcedureIDFromOperationID("from"),
-						Spec: &functions.FromProcedureSpec{
-							Database:  "mydb",
-							BoundsSet: true,
-							Bounds: plan.BoundsSpec{
-								Start: query.Time{
-									Relative:   -5,
-									IsRelative: true,
+						Spec: &testFromProcedureSource{
+							data: []execute.Block{&executetest.Block{
+								Bnds: execute.Bounds{
+									Start: 1,
+									Stop:  5,
 								},
-							},
+								ColMeta: []execute.ColMeta{
+									execute.TimeCol,
+									execute.ColMeta{
+										Label: execute.DefaultValueColLabel,
+										Type:  execute.TInt,
+										Kind:  execute.ValueColKind,
+									},
+								},
+								Data: [][]interface{}{
+									{execute.Time(0), int64(1)},
+									{execute.Time(1), int64(2)},
+									{execute.Time(2), int64(3)},
+									{execute.Time(3), int64(4)},
+									{execute.Time(4), int64(5)},
+								},
+							}},
 						},
 						Parents:  nil,
 						Children: []plan.ProcedureID{plan.ProcedureIDFromOperationID("sum")},
@@ -237,27 +221,6 @@ func TestExecutor_Execute(t *testing.T) {
 		},
 		{
 			name: "multiple aggregates",
-			src: []execute.Block{&executetest.Block{
-				Bnds: execute.Bounds{
-					Start: 1,
-					Stop:  5,
-				},
-				ColMeta: []execute.ColMeta{
-					execute.TimeCol,
-					execute.ColMeta{
-						Label: execute.DefaultValueColLabel,
-						Type:  execute.TFloat,
-						Kind:  execute.ValueColKind,
-					},
-				},
-				Data: [][]interface{}{
-					{execute.Time(0), 1.0},
-					{execute.Time(1), 2.0},
-					{execute.Time(2), 3.0},
-					{execute.Time(3), 4.0},
-					{execute.Time(4), 5.0},
-				},
-			}},
 			plan: &plan.PlanSpec{
 				Now: epoch.Add(5),
 				Resources: query.ResourceManagement{
@@ -271,15 +234,28 @@ func TestExecutor_Execute(t *testing.T) {
 				Procedures: map[plan.ProcedureID]*plan.Procedure{
 					plan.ProcedureIDFromOperationID("from"): {
 						ID: plan.ProcedureIDFromOperationID("from"),
-						Spec: &functions.FromProcedureSpec{
-							Database:  "mydb",
-							BoundsSet: true,
-							Bounds: plan.BoundsSpec{
-								Start: query.Time{
-									Relative:   -5,
-									IsRelative: true,
+						Spec: &testFromProcedureSource{
+							data: []execute.Block{&executetest.Block{
+								Bnds: execute.Bounds{
+									Start: 1,
+									Stop:  5,
 								},
-							},
+								ColMeta: []execute.ColMeta{
+									execute.TimeCol,
+									execute.ColMeta{
+										Label: execute.DefaultValueColLabel,
+										Type:  execute.TFloat,
+										Kind:  execute.ValueColKind,
+									},
+								},
+								Data: [][]interface{}{
+									{execute.Time(0), 1.0},
+									{execute.Time(1), 2.0},
+									{execute.Time(2), 3.0},
+									{execute.Time(3), 4.0},
+									{execute.Time(4), 5.0},
+								},
+							}},
 						},
 						Parents: nil,
 						Children: []plan.ProcedureID{
@@ -351,9 +327,7 @@ func TestExecutor_Execute(t *testing.T) {
 	for _, tc := range testCases {
 		tc := tc
 		t.Run(tc.name, func(t *testing.T) {
-			c := execute.Config{
-				StorageReader: &storageReader{blocks: tc.src},
-			}
+			c := execute.Config{}
 			exe := execute.NewExecutor(c)
 			results, err := exe.Execute(context.Background(), tc.plan)
 			if err != nil {
@@ -376,26 +350,42 @@ func TestExecutor_Execute(t *testing.T) {
 	}
 }
 
-type storageReader struct {
-	blocks []execute.Block
+type testFromProcedureSource struct {
+	data []execute.Block
+	ts   []execute.Transformation
 }
 
-func (s storageReader) Close() {}
-func (s storageReader) Read(context.Context, map[string]string, execute.ReadSpec, execute.Time, execute.Time) (execute.BlockIterator, error) {
-	return &storageBlockIterator{
-		s: s,
-	}, nil
+func (p *testFromProcedureSource) Kind() plan.ProcedureKind {
+	return "from-test"
 }
 
-type storageBlockIterator struct {
-	s storageReader
+func (p *testFromProcedureSource) Copy() plan.ProcedureSpec {
+	return p
 }
 
-func (bi *storageBlockIterator) Do(f func(execute.Block) error) error {
-	for _, b := range bi.s.blocks {
-		if err := f(b); err != nil {
-			return err
+func (p *testFromProcedureSource) AddTransformation(t execute.Transformation) {
+	p.ts = append(p.ts, t)
+}
+
+func (p *testFromProcedureSource) Run(ctx context.Context) {
+	id := execute.DatasetID(uuid.NewV4())
+	for _, t := range p.ts {
+		var max execute.Time
+		for _, b := range p.data {
+			t.Process(id, b)
+			if s := b.Bounds().Stop; s > max {
+				max = s
+			}
 		}
+		t.UpdateWatermark(id, max)
+		t.Finish(id, nil)
 	}
-	return nil
+}
+
+func init() {
+	execute.RegisterSource("from-test", createTestFromSource)
+}
+
+func createTestFromSource(prSpec plan.ProcedureSpec, id execute.DatasetID, a execute.Administration) (execute.Source, error) {
+	return prSpec.(*testFromProcedureSource), nil
 }
